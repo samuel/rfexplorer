@@ -2,8 +2,12 @@ package rfx
 
 // https://github.com/RFExplorer/RFExplorer-for-.NET/wiki/RF-Explorer-UART-API-interface-specification
 
+// TODO https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFE6GEN_CalibrationData.py
+
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -61,6 +65,29 @@ const (
 	CalculatorModeInvalid   CalculatorMode = -1
 )
 
+type MarkerMode byte
+
+const (
+	MarkerModePeak   MarkerMode = 0
+	MarkerModeNone   MarkerMode = 1
+	MarkerModeManual MarkerMode = 2
+)
+
+type Modulation int
+
+const (
+	ModulationOOKRaw Modulation = 0
+	ModulationPSKRaw Modulation = 1
+	ModulationOOKStd Modulation = 2
+	ModulationPSKStd Modulation = 3
+	ModulationNone   Modulation = 0xff
+)
+
+func parseModulation(s string) Modulation {
+	i, _ := strconv.Atoi(s)
+	return Modulation(i)
+}
+
 type CurrentConfigPacket struct {
 	StartFreqKHZ    int
 	FreqStepHZ      int
@@ -77,10 +104,18 @@ type CurrentConfigPacket struct {
 	CalculatorMode  CalculatorMode
 }
 
+func (p *CurrentConfigPacket) Type() string {
+	return "CurrentConfig"
+}
+
 type CurrentSetupPacket struct {
 	Model           Model
 	ExpansionModel  Model
 	FirmwareVersion string
+}
+
+func (p *CurrentSetupPacket) Type() string {
+	return "CurrentSetup"
 }
 
 type CalibrationAvailabilityPacket struct {
@@ -88,16 +123,78 @@ type CalibrationAvailabilityPacket struct {
 	ExpansionBoardInternalCalibrationAvailable bool
 }
 
+func (p *CalibrationAvailabilityPacket) Type() string {
+	return "CalibrationAvailability"
+}
+
 type SweepDataPacket struct {
 	Samples []float64
+}
+
+func (p *SweepDataPacket) Type() string {
+	return "SweepData"
 }
 
 type SerialNumberPacket struct {
 	SN string
 }
 
+func (p *SerialNumberPacket) Type() string {
+	return "SerialNumber"
+}
+
+// Preset represents a stored preset.
+type Preset struct {
+	// Index is the index of the preset starting at 0 (equivalent to 1 in the interface).
+	// The valid range is [0,29] for standard units and [0,99] for Plus units.
+	Index int
+	// Name should be 7-bit ascii, ideally limited to A-Z, a-z, 0-9, and simple symbols like ., -, +, _, etc. Max length of 12.
+	Name       string
+	MinFreqKHz int
+	MaxFreqKHz int
+	// AmpTopDBm range [-110, +35]. Should be at least 10 more than AmpBottomDBm.
+	AmpTopDBm int
+	// AmpBottomDBm range [-120, +25]. Should be at least 10 less than AmpTopDBm.
+	AmpBottomDBm int
+	CalcMode     CalculatorMode
+	// CalcIterations range [1, 16]
+	CalcIterations int
+	Mainboard      bool
+	MarkerMode     MarkerMode
+}
+
+func (p *Preset) Type() string {
+	return "Preset"
+}
+
+type EndOfPresetsPacket struct{}
+
+func (p *EndOfPresetsPacket) Type() string {
+	return "EndOfPresets"
+}
+
+type CurrentSnifferConfig struct {
+	StartFreqKHZ    int
+	ExpModuleActive bool
+	CurrentMode     Mode
+	Delay           int
+	Modulation      Modulation
+	RBWKHZ          int
+	ThresholdDBM    float64
+}
+
+func (p *CurrentSnifferConfig) Type() string {
+	return "CurrentSnifferConfig"
+}
+
+// ScreenImage is a image of the LCD screen sent by the device. It implements
+// the image.Image interface.
 type ScreenImage struct {
 	Data []byte
+}
+
+func (si *ScreenImage) Type() string {
+	return "ScreenImage"
 }
 
 // ColorModel returns the Image's color model.
@@ -128,8 +225,22 @@ func (si *ScreenImage) AtGray(x, y int) color.Gray {
 	return color.Gray{Y: 255 ^ (255 * ((si.Data[(y/8)*128+x] >> (uint(y) % 8)) & 1))}
 }
 
-type RawPacket struct {
+// UnhandledPacket is the contents of an unhandled packet sent from RF Explorer.
+type UnhandledPacket struct {
 	Data []byte
+}
+
+func (p *UnhandledPacket) Type() string {
+	return "UnhandledPacket"
+}
+
+// RawData is a packet of raw bytes sent from RF explorer as used by the sniffer.
+type RawData struct {
+	Data []byte
+}
+
+func (p *RawData) Type() string {
+	return "RawData"
 }
 
 func parseASCIIDecimal(s string) int {
@@ -209,8 +320,44 @@ func (m CalculatorMode) String() string {
 	case CalculatorModeInvalid:
 		return "Invalid"
 	}
-	return fmt.Sprintf("Mode(%d)", int(m))
+	return fmt.Sprintf("CalculatorMode(%d)", int(m))
 }
+
+func (m MarkerMode) String() string {
+	switch m {
+	case MarkerModePeak:
+		return "Peak"
+	case MarkerModeNone:
+		return "None"
+	case MarkerModeManual:
+		return "Manual"
+	}
+	return fmt.Sprintf("MarkerMode(%d)", int(m))
+}
+
+// class eDSP(Enum):
+//     """All possible DSP values
+// 	"""
+//     DSP_AUTO = 0
+//     DSP_FILTER = 1
+//     DSP_FAST = 2
+//     DSP_NO_IMG = 3
+
+// BaudRate is the serial communications baud rate configured on the RF Explorer.
+type BaudRate int
+
+// Supported baud rates.
+const (
+	BaudRate1200   BaudRate = 1200
+	BaudRate2400   BaudRate = 2400
+	BaudRate4800   BaudRate = 4800
+	BaudRate9600   BaudRate = 9600
+	BaudRate19200  BaudRate = 19200
+	BaudRate38400  BaudRate = 38400
+	BaudRate57600  BaudRate = 57600
+	BaudRate115200 BaudRate = 115200
+	BaudRate500000 BaudRate = 500000
+)
 
 func parseModel(m string) Model {
 	if m == "" {
@@ -257,16 +404,21 @@ func parseCalculatorMode(m string) CalculatorMode {
 	return CalculatorMode(i)
 }
 
-type Packet interface{}
-
-type RFExplorer struct {
-	port     io.ReadWriteCloser
-	writeBuf []byte
-	closeCh  chan struct{}
-	readCh   chan Packet
-	config   atomic.Value // *CurrentConfigPacket
+type Packet interface {
+	Type() string
 }
 
+type RFExplorer struct {
+	port          io.ReadWriteCloser
+	writeBuf      []byte
+	closeCh       chan struct{}
+	readCh        chan Packet
+	config        atomic.Value // *CurrentConfigPacket
+	endOfPresetCh chan struct{}
+}
+
+// New initiates a connection to the RF Explorer over the provided device.
+// TODO: currently a baud rate of 500,000 is assumed.
 func New(device string) (*RFExplorer, error) {
 	options := serial.OpenOptions{
 		PortName:        device,
@@ -284,14 +436,16 @@ func New(device string) (*RFExplorer, error) {
 	}
 
 	rf := &RFExplorer{
-		port:     port,
-		writeBuf: make([]byte, 256),
-		closeCh:  make(chan struct{}),
-		readCh:   make(chan Packet, 16),
+		port:          port,
+		writeBuf:      make([]byte, 256),
+		closeCh:       make(chan struct{}),
+		readCh:        make(chan Packet, 16),
+		endOfPresetCh: make(chan struct{}, 1),
 	}
 	go rf.readLoop()
 
 	// Get the initial config
+	// TODO: this fails depending on mode
 	if err := rf.RequestConfig(); err != nil {
 		return nil, err
 	}
@@ -311,6 +465,7 @@ setupLoop:
 	return rf, nil
 }
 
+// Close close the communucation device.
 func (r *RFExplorer) Close() error {
 	close(r.closeCh)
 	close(r.readCh)
@@ -325,6 +480,7 @@ func (r *RFExplorer) Config() *CurrentConfigPacket {
 	return r.config.Load().(*CurrentConfigPacket)
 }
 
+// SetLCDEnabled requests RF Explorer to turn the LCD on or off.
 func (r *RFExplorer) SetLCDEnabled(enabled bool) error {
 	// #<Size>C(0|1)
 	r.writeBuf[0] = '#'
@@ -356,22 +512,80 @@ func (r *RFExplorer) ResetInternalBuffers() error {
 	return r.SendCommand("Cr")
 }
 
-// RequestSerialNumber requests the serial number from the RF Explorer
+// RequestSerialNumber requests the serial number from the RF Explorer.
 func (r *RFExplorer) RequestSerialNumber() error {
 	return r.SendCommand("Cn")
 }
 
-// RequestConfig requests RF Explorer to send the currnet configuration
+// RequestConfig requests RF Explorer to send the current configuration.
 func (r *RFExplorer) RequestConfig() error {
 	return r.SendCommand("C0")
 }
 
-// RequestInternalCalibrationData requests RF Explorer to send the currnet configuration
+// RequestPresets requests RF explorer to send the presents.
+func (r *RFExplorer) RequestPresets() error {
+	return r.SendCommand("CP\x00")
+}
+
+// UpdatePreset updates a stored preset.
+func (r *RFExplorer) UpdatePreset(ctx context.Context, p *Preset) error {
+	// "#$CP" \x01 index:byte name:byte*12 \x00 \x00 minfreqkhz:uint32 maxfeqkhz:uint32 calcmode:byte amptop:int8 ampbottom:int8 calciter:byte mainboard:bool markermode:byte \x42 \x00
+	buf := make([]byte, 36)
+	buf[0] = '#'
+	buf[1] = 0x24
+	buf[2] = 'C'
+	buf[3] = 'P'
+	buf[4] = 0x01
+
+	// TODO: filter invalid characters from name
+	// TODO: validate / clamp all parameters
+	buf[5] = byte(p.Index)
+	name := p.Name
+	if len(name) > 12 {
+		name = name[:12]
+	}
+	copy(buf[6:], name)
+	buf[6+len(name)] = 0
+	buf[18] = 0
+	buf[19] = 0
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(p.MinFreqKHz))
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(p.MaxFreqKHz))
+	buf[28] = byte(p.CalcMode)
+	buf[29] = byte(int8(p.AmpTopDBm))
+	buf[30] = byte(int8(p.AmpBottomDBm))
+	buf[31] = byte(p.CalcIterations)
+	if p.Mainboard {
+		buf[32] = 1
+	} else {
+		buf[32] = 0
+	}
+	buf[33] = byte(p.MarkerMode)
+	buf[34] = 0x42
+	buf[35] = 0
+	// Clear end of preset channel so we can know if we receive one.
+	select {
+	case <-r.endOfPresetCh:
+	default:
+	}
+	if err := r.write(buf[:36]); err != nil {
+		return err
+
+	}
+	// Way for end of presets
+	select {
+	case <-r.endOfPresetCh:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
+// RequestInternalCalibrationData requests RF Explorer to send the currnet configuration.
 func (r *RFExplorer) RequestInternalCalibrationData() error {
 	return r.SendCommand("Cq")
 }
 
-// SwitchModuleMain request RF Explorer to enable Mainboard module
+// SwitchModuleMain request RF Explorer to enable Mainboard module.
 func (r *RFExplorer) SwitchModuleMain() error {
 	return r.SendCommand("CM\x00")
 }
@@ -381,9 +595,34 @@ func (r *RFExplorer) Hold() error {
 	return r.SendCommand("CH")
 }
 
-// SwitchModuleExp request RF Explorer to enable Expansion module
+// SwitchModuleExp request RF Explorer to enable Expansion module.
 func (r *RFExplorer) SwitchModuleExp() error {
 	return r.SendCommand("CM\x01")
+}
+
+// SetBaudRate requets RF Explorer to set the serial baud rate.
+func (r *RFExplorer) SetBaudRate(br BaudRate) error {
+	switch br {
+	case BaudRate1200:
+		return r.SendCommand("c1")
+	case BaudRate2400:
+		return r.SendCommand("c2")
+	case BaudRate4800:
+		return r.SendCommand("c3")
+	case BaudRate9600:
+		return r.SendCommand("c4")
+	case BaudRate19200:
+		return r.SendCommand("c5")
+	case BaudRate38400:
+		return r.SendCommand("c6")
+	case BaudRate57600:
+		return r.SendCommand("c7")
+	case BaudRate115200:
+		return r.SendCommand("c8")
+	case BaudRate500000:
+		return r.SendCommand("c0")
+	}
+	return fmt.Errorf("rfx: unknown baud rate %d", br)
 }
 
 func (r *RFExplorer) Realtime() error {
@@ -405,19 +644,33 @@ func (r *RFExplorer) SetGeneratorPower(on bool) error {
 	return r.SendCommand("CP0")
 }
 
-// func (r *RFExplorer) SetSteps(steps int) error {
-// 	// Not sure about this.. found it in https://github.com/RFExplorer/RFExplorer_3GP_IoT_Arduino/blob/cff0e6abb31a77a54aefc3803b5b99a62cb897fe/src/RFExplorer_3GP_IoT.cpp
-//	// Or steps/16
-// 	switch steps {
-// 	case 112:
-// 		return r.SendCommand("CP\x06")
-// 	case 240:
-// 		return r.SendCommand("CP\x0E")
-// 	case 512:
-// 		return r.SendCommand("CP\xFF")
-// 	}
-// 	return fmt.Errorf("rfx: unsupported number of steps %d", steps)
-// }
+// TODO: SetCalculator	#<Size>C+<CalcMode>	Request RF Explorer to set onboard calculator mode <Size>=5 bytes
+// TODO: SetDSP	#<Size>Cp <DSP_Mode>	Request RF Explorer to set onboard DSP mode <Size>=5 bytes	1.12
+// TODO: SetOffsetDB	#<Size>CO <OffsetDB>	Request RF Explorer to set onboard Amplitude Offset in dB <Size>=5 bytes
+// TODO: SetInputStage	#<Size>a <InputStage>	Request RF Explorer to set onboard input stage mode, available in WSUB1G+ and IoT models only <Size>=4 bytes
+// TODO: SetSweepPointsLarge	#<Size>Cj <Sample_points_large>	Request RF Explorer to change to new data point sweep size <Size>=6 bytes - this mode support sweep sizes up to 65536 data points
+
+// SetSweepPoints sets the number of sweep data points (16-4096, multiple of 16).
+func (r *RFExplorer) SetSweepPoints(steps int) error {
+	if steps < 16 {
+		steps = 16
+	}
+	if steps > 4096 {
+		steps = 4096
+	}
+	return r.SendCommand("CJ" + string([]byte{byte((steps - 16) / 16)}))
+}
+
+// SetSweepPointsEx sets the number of sweep data points (112-65536, multiple of 2).
+func (r *RFExplorer) SetSweepPointsEx(steps int) error {
+	if steps < 112 {
+		steps = 112
+	}
+	if steps > 65536 {
+		steps = 65536
+	}
+	return r.SendCommand("Cj" + string([]byte{byte((steps & 0xff00) >> 8), byte(steps & 0xff)}))
+}
 
 // SetAnalyzerConfig will change current configuration for RF Explorer and send current Spectrum Analyzer configuration data back to PC.
 func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZ int) error {
@@ -464,6 +717,11 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 	return nil
 }
 
+// Sample rate value should be in range 20,000 – 500,000 for OOK RAW modulation modes usually found in commercial devices, but some experimentation may be needed. This is the sample rate at which the internal decoder will detect activity – the higher this value the better capture resolution but at the cost of a shorter capture time lapse.
+func (r *RFExplorer) SetSnifferConfig(centerFreqKHZ int, sampleRate int) error {
+	return nil // TODO
+}
+
 // SendCommand sends a "#" command to the RF Explorer
 func (r *RFExplorer) SendCommand(cmd string) error {
 	if len(cmd) > 253 {
@@ -502,7 +760,7 @@ func (r *RFExplorer) handlePacket(pkt Packet) {
 // }
 
 func (r *RFExplorer) readLoop() {
-	buf := make([]byte, 2048)
+	buf := make([]byte, 8192)
 	off := 0
 	for {
 		if off >= len(buf)-1 {
@@ -527,10 +785,7 @@ func (r *RFExplorer) readLoop() {
 	decodeLoop:
 		for off > 2 {
 			// See if there's an EOL
-			eolIdx := bytes.IndexByte(buf[:off], '\r')
-			if eolIdx < 0 || len(buf)-1 == eolIdx || buf[eolIdx+1] != '\n' {
-				eolIdx = -1
-			}
+			eolIdx := bytes.Index(buf[:off], []byte{0x0d, 0x0a})
 			// The buffer is guaranteed to be at least 3 bytes long now
 			b := buf[:off]
 			handled := false
@@ -549,14 +804,28 @@ func (r *RFExplorer) readLoop() {
 					})
 					eolIdx = 0x402
 					handled = true
+				case 'R':
+					// Raw data (used for sniffer)
+					nBytes := int(buf[2]) | (int(buf[3]) << 8)
+					if len(b) < nBytes+4 {
+						break decodeLoop
+					}
+					data := make([]byte, nBytes)
+					copy(data, b[4:4+nBytes])
+					r.handlePacket(&RawData{
+						Data: data,
+					})
+					eolIdx = 4 + nBytes
+					handled = true
 				case 'S':
 					// Sweep_data - $S<Sample_Steps> <AdBm>… <AdBm> <EOL> - Send all dBm sample points to PC client, in binary
 					if eolIdx < 0 {
 						break decodeLoop
 					}
-					if len(b) > 3 && b[1] == 'S' {
+					if len(b) > 3 {
 						nSamples := int(b[2])
 						if len(b) < 3+nSamples {
+							// TODO: insert error into packet stream
 							fmt.Printf("SHORT\n")
 						} else {
 							if eolIdx < 3+nSamples {
@@ -580,6 +849,25 @@ func (r *RFExplorer) readLoop() {
 							handled = true
 						}
 					}
+				case 'P':
+					// "$P " index:byte \x01 name:byte*12 \x00 \x00 minfreqkhz:uint32 maxfeqkhz:uint32 calcmode:byte amptop:int8 ampbottom:int8 calciter:byte mainboard:bool markermode:byte \x42 \x00
+					nameBytes := buf[5 : 5+12]
+					if ix := bytes.IndexByte(nameBytes, 0); ix >= 0 {
+						nameBytes = nameBytes[:ix]
+					}
+					r.handlePacket(&Preset{
+						Index:          int(buf[3]),
+						Name:           string(nameBytes),
+						MinFreqKHz:     int(binary.LittleEndian.Uint32(buf[19:23])),
+						MaxFreqKHz:     int(binary.LittleEndian.Uint32(buf[23:27])),
+						CalcMode:       CalculatorMode(buf[27]),
+						AmpTopDBm:      int(int8(buf[28])),
+						AmpBottomDBm:   int(int8(buf[29])),
+						CalcIterations: int(buf[30]),
+						Mainboard:      buf[31] != 0,
+						MarkerMode:     MarkerMode(buf[32]),
+					})
+					handled = true
 				}
 			case '#':
 				if eolIdx < 0 {
@@ -591,10 +879,10 @@ func (r *RFExplorer) readLoop() {
 
 				switch b[1] {
 				case 'C':
-					// TODO: #C3- ??
+
 					if len(b) > 6 {
 						switch b[2] {
-						case '2':
+						case '2': // Spectrum Analyzer mode
 							if b[3] == '-' && b[5] == ':' {
 								switch b[4] {
 								case 'F':
@@ -640,6 +928,31 @@ func (r *RFExplorer) readLoop() {
 									handled = true
 								}
 							}
+						// case '3': // Signal generator CW, SweepFreq and SweepAmp modes // TODO: #C3- https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFEConfiguration.py#L136
+						case '4': // Sniffer mode
+							// TODO: #C4- https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFEConfiguration.py#L190
+							// self.fStartMHZ = int(sLine[6:13]) / 1000.0 #note it comes in KHZ
+							// self.bExpansionBoardActive = (sLine[14] == '1')
+							// self.m_eMode = RFE_Common.eMode(int(sLine[16:19]))
+							// nDelay = int(sLine[20:25])
+							// self.nBaudrate = int(round(float(RFE_Common.CONST_FCY_CLOCK) / nDelay))   #FCY_CLOCK = 16 * 1000 * 1000
+							// self.eModulations = RFE_Common.eModulation(int(sLine[26:27]))
+							// ... use Modulation type
+							// self.fRBWKHZ = int(sLine[28:33])
+							// self.fThresholdDBM = (float)(-0.5 * float(sLine[34:37]))
+							if b[3] == '-' && b[4] == 'F' && b[5] == ':' {
+								p := strings.Split(string(b[6:]), ",")
+								r.handlePacket(&CurrentSnifferConfig{
+									StartFreqKHZ:    parseASCIIDecimal(p[0]),
+									ExpModuleActive: p[1] == "1",
+									CurrentMode:     parseMode(p[2]),
+									Delay:           parseASCIIDecimal(p[3]), // baudrate = (FCY_CLOCK=16*1000*1000)/delay,
+									Modulation:      parseModulation(p[4]),
+									RBWKHZ:          parseASCIIDecimal(p[5]),
+									ThresholdDBM:    -0.5 * float64(parseASCIIDecimal(p[6])),
+								})
+								handled = true
+							}
 						case 'A':
 							if b[3] == 'L' && b[4] == ':' {
 								r.handlePacket(&CalibrationAvailabilityPacket{
@@ -653,19 +966,29 @@ func (r *RFExplorer) readLoop() {
 				case 'S':
 					// Serial_Number - #Sn<SerialNumber> - device serial number
 					if b[2] == 'n' {
-						r.handlePacket(&SerialNumberPacket{SN: string(buf[:eolIdx])})
+						r.handlePacket(&SerialNumberPacket{SN: string(buf[3:eolIdx])})
+						handled = true
+					}
+				case 'P':
+					if len(b) >= 4 && string(b[:4]) == "#PCK" {
+						select {
+						case r.endOfPresetCh <- struct{}{}:
+						default:
+						}
+						r.handlePacket(&EndOfPresetsPacket{})
 						handled = true
 					}
 				}
 			}
-			if eolIdx < 0 {
-				break
-			}
-			if eolIdx >= 0 && !handled {
+			if !handled && eolIdx >= 0 {
 				// Need to copy the data as we reuse the buffer
 				b2 := make([]byte, eolIdx)
 				copy(b2, b[:eolIdx])
-				r.handlePacket(&RawPacket{Data: b2})
+				r.handlePacket(&UnhandledPacket{Data: b2})
+				handled = true
+			}
+			if !handled {
+				break
 			}
 			copy(buf, buf[eolIdx+2:])
 			off -= eolIdx + 2

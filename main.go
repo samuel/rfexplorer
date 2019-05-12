@@ -4,14 +4,18 @@ package main
 // https://en.wikipedia.org/wiki/List_of_WLAN_channels#5.C2.A0GHz_.28802.11a.2Fh.2Fj.2Fn.2Fac.29.5B18.5D
 
 import (
+	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	termbox "github.com/nsf/termbox-go"
 	"github.com/samuel/rfexplorer/rfx"
@@ -39,6 +43,108 @@ var wifi24Channels = []channel{
 	{name: "12", centerFreqHz: 2467000000, widthHZ: 20000000},
 	{name: "13", centerFreqHz: 2472000000, widthHZ: 20000000},
 	{name: "14", centerFreqHz: 2484000000, widthHZ: 20000000},
+}
+
+const vtx58ChannelWidth = 10000000
+
+var vtx58Channels = []channel{
+	// Band A: Team BlackSheep (TBS), RangeVideo, SpyHawk, FlyCamOne USA
+	{name: "A1", centerFreqHz: 5865000000, widthHZ: vtx58ChannelWidth},
+	{name: "A2", centerFreqHz: 5845000000, widthHZ: vtx58ChannelWidth},
+	{name: "A3", centerFreqHz: 5825000000, widthHZ: vtx58ChannelWidth},
+	{name: "A4", centerFreqHz: 5805000000, widthHZ: vtx58ChannelWidth},
+	{name: "A5", centerFreqHz: 5785000000, widthHZ: vtx58ChannelWidth},
+	{name: "A6", centerFreqHz: 5765000000, widthHZ: vtx58ChannelWidth},
+	{name: "A7", centerFreqHz: 5745000000, widthHZ: vtx58ChannelWidth},
+	{name: "A8", centerFreqHz: 5725000000, widthHZ: vtx58ChannelWidth},
+
+	// Band B: FlyCamOne Europe
+	{name: "B1", centerFreqHz: 5733000000, widthHZ: vtx58ChannelWidth},
+	{name: "B2", centerFreqHz: 5752000000, widthHZ: vtx58ChannelWidth},
+	{name: "B3", centerFreqHz: 5771000000, widthHZ: vtx58ChannelWidth},
+	{name: "B4", centerFreqHz: 5790000000, widthHZ: vtx58ChannelWidth},
+	{name: "B5", centerFreqHz: 5809000000, widthHZ: vtx58ChannelWidth},
+	{name: "B6", centerFreqHz: 5828000000, widthHZ: vtx58ChannelWidth},
+	{name: "B7", centerFreqHz: 5847000000, widthHZ: vtx58ChannelWidth},
+	{name: "B8", centerFreqHz: 5866000000, widthHZ: vtx58ChannelWidth},
+
+	// Band E: HobbyKing, Foxtech
+	{name: "E1", centerFreqHz: 5705000000, widthHZ: vtx58ChannelWidth},
+	{name: "E2", centerFreqHz: 5685000000, widthHZ: vtx58ChannelWidth},
+	{name: "E3", centerFreqHz: 5665000000, widthHZ: vtx58ChannelWidth},
+	{name: "E4", centerFreqHz: 5645000000, widthHZ: vtx58ChannelWidth},
+	{name: "E5", centerFreqHz: 5885000000, widthHZ: vtx58ChannelWidth},
+	{name: "E6", centerFreqHz: 5905000000, widthHZ: vtx58ChannelWidth},
+	{name: "E7", centerFreqHz: 5925000000, widthHZ: vtx58ChannelWidth},
+	{name: "E8", centerFreqHz: 5945000000, widthHZ: vtx58ChannelWidth},
+
+	// Band F (Airwave): ImmersionRC, Iftron
+	{name: "F1", centerFreqHz: 5740000000, widthHZ: vtx58ChannelWidth},
+	{name: "F2", centerFreqHz: 5760000000, widthHZ: vtx58ChannelWidth},
+	{name: "F3", centerFreqHz: 5780000000, widthHZ: vtx58ChannelWidth},
+	{name: "F4", centerFreqHz: 5800000000, widthHZ: vtx58ChannelWidth},
+	{name: "F5", centerFreqHz: 5820000000, widthHZ: vtx58ChannelWidth},
+	{name: "F6", centerFreqHz: 5840000000, widthHZ: vtx58ChannelWidth},
+	{name: "F7", centerFreqHz: 5860000000, widthHZ: vtx58ChannelWidth},
+	{name: "F8", centerFreqHz: 5880000000, widthHZ: vtx58ChannelWidth},
+
+	// Band C (R): Raceband
+	{name: "C1", centerFreqHz: 5658000000, widthHZ: vtx58ChannelWidth},
+	{name: "C2", centerFreqHz: 5695000000, widthHZ: vtx58ChannelWidth},
+	{name: "C3", centerFreqHz: 5732000000, widthHZ: vtx58ChannelWidth},
+	{name: "C4", centerFreqHz: 5769000000, widthHZ: vtx58ChannelWidth},
+	{name: "C5", centerFreqHz: 5806000000, widthHZ: vtx58ChannelWidth},
+	{name: "C6", centerFreqHz: 5843000000, widthHZ: vtx58ChannelWidth},
+	{name: "C7", centerFreqHz: 5880000000, widthHZ: vtx58ChannelWidth},
+	{name: "C8", centerFreqHz: 5917000000, widthHZ: vtx58ChannelWidth},
+
+	// Band D: Diatone
+	{name: "D1", centerFreqHz: 5362000000, widthHZ: vtx58ChannelWidth},
+	{name: "D2", centerFreqHz: 5399000000, widthHZ: vtx58ChannelWidth},
+	{name: "D3", centerFreqHz: 5436000000, widthHZ: vtx58ChannelWidth},
+	{name: "D4", centerFreqHz: 5473000000, widthHZ: vtx58ChannelWidth},
+	{name: "D5", centerFreqHz: 5510000000, widthHZ: vtx58ChannelWidth},
+	{name: "D6", centerFreqHz: 5547000000, widthHZ: vtx58ChannelWidth},
+	{name: "D7", centerFreqHz: 5584000000, widthHZ: vtx58ChannelWidth},
+	{name: "D8", centerFreqHz: 5621000000, widthHZ: vtx58ChannelWidth},
+
+	{name: "U1", centerFreqHz: 5325000000, widthHZ: vtx58ChannelWidth},
+	{name: "U2", centerFreqHz: 5348000000, widthHZ: vtx58ChannelWidth},
+	{name: "U3", centerFreqHz: 5366000000, widthHZ: vtx58ChannelWidth},
+	{name: "U4", centerFreqHz: 5384000000, widthHZ: vtx58ChannelWidth},
+	{name: "U5", centerFreqHz: 5402000000, widthHZ: vtx58ChannelWidth},
+	{name: "U6", centerFreqHz: 5420000000, widthHZ: vtx58ChannelWidth},
+	{name: "U7", centerFreqHz: 5438000000, widthHZ: vtx58ChannelWidth},
+	{name: "U8", centerFreqHz: 5456000000, widthHZ: vtx58ChannelWidth},
+
+	{name: "O1", centerFreqHz: 5474000000, widthHZ: vtx58ChannelWidth},
+	{name: "O2", centerFreqHz: 5492000000, widthHZ: vtx58ChannelWidth},
+	{name: "O3", centerFreqHz: 5510000000, widthHZ: vtx58ChannelWidth},
+	{name: "O4", centerFreqHz: 5528000000, widthHZ: vtx58ChannelWidth},
+	{name: "O5", centerFreqHz: 5546000000, widthHZ: vtx58ChannelWidth},
+	{name: "O6", centerFreqHz: 5564000000, widthHZ: vtx58ChannelWidth},
+	{name: "O7", centerFreqHz: 5582000000, widthHZ: vtx58ChannelWidth},
+	{name: "O8", centerFreqHz: 5600000000, widthHZ: vtx58ChannelWidth},
+
+	// Band L: Low band
+	{name: "L1", centerFreqHz: 5333000000, widthHZ: vtx58ChannelWidth},
+	{name: "L2", centerFreqHz: 5373000000, widthHZ: vtx58ChannelWidth},
+	{name: "L3", centerFreqHz: 5413000000, widthHZ: vtx58ChannelWidth},
+	{name: "L4", centerFreqHz: 5453000000, widthHZ: vtx58ChannelWidth},
+	{name: "L5", centerFreqHz: 5493000000, widthHZ: vtx58ChannelWidth},
+	{name: "L6", centerFreqHz: 5533000000, widthHZ: vtx58ChannelWidth},
+	{name: "L7", centerFreqHz: 5573000000, widthHZ: vtx58ChannelWidth},
+	{name: "L8", centerFreqHz: 5613000000, widthHZ: vtx58ChannelWidth},
+
+	// Band H: High band
+	{name: "H1", centerFreqHz: 5653000000, widthHZ: vtx58ChannelWidth},
+	{name: "H2", centerFreqHz: 5693000000, widthHZ: vtx58ChannelWidth},
+	{name: "H3", centerFreqHz: 5733000000, widthHZ: vtx58ChannelWidth},
+	{name: "H4", centerFreqHz: 5773000000, widthHZ: vtx58ChannelWidth},
+	{name: "H5", centerFreqHz: 5813000000, widthHZ: vtx58ChannelWidth},
+	{name: "H6", centerFreqHz: 5853000000, widthHZ: vtx58ChannelWidth},
+	{name: "H7", centerFreqHz: 5893000000, widthHZ: vtx58ChannelWidth},
+	{name: "H8", centerFreqHz: 5933000000, widthHZ: vtx58ChannelWidth},
 }
 
 // var zigbeeChannels = []int{
@@ -120,10 +226,9 @@ func main() {
 	// 	log.Fatal(err)
 	// }
 
-	if err := rfe.SetAnalyzerConfig(463000, 464000, 0, -120, 0); err != nil {
-		log.Fatal(err)
-	}
-
+	// if err := rfe.SetAnalyzerConfig(433900, 434100, 0, -120, 0); err != nil {
+	// 	log.Fatal(err)
+	// }
 	if err := rfe.SetScreenDumpEnabled(false); err != nil {
 		log.Fatal(err)
 	}
@@ -141,6 +246,9 @@ func main() {
 	if err := rfe.RequestConfig(); err != nil {
 		log.Fatal(err)
 	}
+	if err := rfe.RequestPresets(); err != nil {
+		log.Fatal(err)
+	}
 
 	if err := termbox.Init(); err != nil {
 		log.Fatal(err)
@@ -151,6 +259,7 @@ func main() {
 	// termbox.SetInputMode(termbox.InputEsc)
 
 	wifi24 := uint32(0)
+	vtx85ghz := uint32(0)
 	dumpingScreen := uint32(0)
 
 	logFile, err := os.Create("log.txt")
@@ -204,6 +313,18 @@ func main() {
 						if err := rfe.SetScreenDumpEnabled(isDumping != 0); err != nil {
 							log.Fatal(err)
 						}
+					case 'v':
+						if atomic.LoadUint32(&vtx85ghz) == 0 {
+							if err := rfe.SwitchModuleMain(); err != nil {
+								log.Fatal(err)
+							}
+							if err := rfe.SetAnalyzerConfig(5350000, 5950000, 0, -120, 0); err != nil {
+								log.Fatal(err)
+							}
+							atomic.StoreUint32(&vtx85ghz, 1)
+						} else {
+							atomic.StoreUint32(&vtx85ghz, 0)
+						}
 					case 'w':
 						if atomic.LoadUint32(&wifi24) == 0 {
 							if err := rfe.SetAnalyzerConfig(2401000, 2495000, 0, -120, 0); err != nil {
@@ -213,7 +334,6 @@ func main() {
 						} else {
 							atomic.StoreUint32(&wifi24, 0)
 						}
-					}
 				}
 			}
 		}
@@ -235,8 +355,10 @@ func main() {
 	for {
 		select {
 		case pkt := <-rfe.Chan():
+			// fmt.Fprintf(logFile, "%#+v\n", pkt)
 			switch pkt := pkt.(type) {
 			case *rfx.CurrentConfigPacket:
+				fmt.Fprintf(logFile, "%#+v\n", pkt)
 				// fmt.Printf("%#+v\n", pkt)
 				config = pkt
 			case *rfx.SweepDataPacket:
@@ -264,6 +386,9 @@ func main() {
 					}
 					sumCount = 0
 					maxAmp = -999.0
+					maxAmpFreq = 0
+				} else {
+					maxAmp = -999
 					maxAmpFreq = 0
 				}
 
@@ -343,16 +468,25 @@ func main() {
 							const l = '|'
 							if i > 0 {
 								if maxSamples[i-1] < maxSamples[i] {
-									for y += 1; y < ampToY(maxSamples[i-1]); y++ {
+									for y++; y < ampToY(maxSamples[i-1]); y++ {
 										termbox.SetCell(left+i-1, y, r, termbox.ColorWhite, termbox.ColorBlack)
 									}
 								} else if maxSamples[i-1] > maxSamples[i] {
-									for y -= 1; y > ampToY(maxSamples[i-1]); y-- {
+									for y--; y > ampToY(maxSamples[i-1]); y-- {
 										termbox.SetCell(left+i, y, l, termbox.ColorWhite, termbox.ColorBlack)
 									}
 								}
 							}
 						}
+					}
+					if atomic.LoadUint32(&vtx85ghz) != 0 {
+						var chs []string
+						for _, c := range vtx58Channels {
+							if maxAmpFreq > c.centerFreqHz-c.widthHZ/2 && maxAmpFreq < c.centerFreqHz+c.widthHZ/2 {
+								chs = append(chs, c.name)
+							}
+						}
+						putString(0, bottom-1, strings.Join(chs, ", "), termbox.ColorWhite, termbox.ColorBlack)
 					}
 				} else {
 					chanSums := make([]float64, len(channels))
@@ -446,8 +580,8 @@ func main() {
 			// case *rfx.CalibrationAvailabilityPacket:
 			// case *rfx.SerialNumberPacket:
 			// case *rfx.CurrentSetupPacket:
-			case *rfx.RawPacket:
-				fmt.Fprintf(logFile, "%q\n", string(pkt.Data))
+			case *rfx.UnhandledPacket:
+				fmt.Fprintf(logFile, "%s\n", hex.Dump(pkt.Data))
 			default:
 				fmt.Fprintf(logFile, "%#+v\n", pkt)
 			}
