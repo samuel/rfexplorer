@@ -1,8 +1,34 @@
 package rfx
 
 // https://github.com/RFExplorer/RFExplorer-for-.NET/wiki/RF-Explorer-UART-API-interface-specification
+//   https://web.archive.org/web/*/https://github.com/RFExplorer/RFExplorer-for-.NET/wiki/RF-Explorer-UART-API-interface-specification
 
 // TODO https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFE6GEN_CalibrationData.py
+
+// Calibration data: https://github.com/arocholl/rfexplorer/blob/325612c82eb44f528297c42fa2c1749d7a1cf375/RFExplorerCommunicator/RFECommunicator.cs#L1389
+// #[0x0A]Cb[0x01][0x1F][0x00][0x04][0x00][0x00]
+//19:28:53.090 DEBUG Sent to RFE: #[0x1E]C4-F:0440000,00510,100,00266
+//19:28:53.293 Received configuration: #C4-F:0440000,1,006,00266,0,00510,100,
+//19:28:53.293 DEBUG Sent to RFE: #[0x0A]Cb[0x01][0x1F][0x00][0x04][0x00][0x00]
+// $Cb[0x01][0x1F][0x00][0x04][0x00][0x00][0xE7][0xE9][0xE8][0xE9][0xDD][0xEA][0xE9][0xDB][0xDE][0xE2][0xE6][0xE6][0xE5][0xE7][0xE6][0xE6][0xF1][0xF1][0xF0][0xF1][0xF2][0xF2][0xF2][0xF1][0xEE][0xE9][0xE8][0xE4][0xEB][0xEB][0xE7][0xE6][0xEB][0xF1][0xF2][0xF2][0xF1][0xF0][0xF1][0xF1][0xF1][0xF1][0xF2][0xF1][0xF1][0xF0][0xF0][0xEB][0xEB][0xEA][0xEB][0xEA][0xEA][0xEA][0xEB][0xEB][0xEB][0xEA][0xEB][0xE8][0xE6][0xE3][0xE0][0xE1][0xE3][0xE4][0xE3][0xE4][0xE4][0xE4][0xE3][0xE3][0xE2][0xE3][0xE3][0xE3][0xE3][0xE1][0xE0][0xDD][0xE2][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xEB][0xE7][0xE8][0xE8][0xE9][0xE9][0xE9][0xE9][0xE7][0xE8][0xE8][0xE8][0xE8][0xE8][0xE9][0xE8][0xF0][0xF1][0xF1][0xF1][0xF1][0xF0][0xEF][0xF0][0xEF][0xEF][0xEF][0xEF][0xEE][0xEE][0xEF][0xEE][0xEF][0xEE][0xEF][0xEE][0xED][0xEC][0xEE][0xEE][0xEF][0xF0][0xF0][0xEF][0xF0][0xEF][0xEF][0xEE][0xEE][0xED][0xEE][0xEF][0xEF][0xEF][0xEF][0xEF][0xEF][0xEF][0xEF][0xF4][0xF2][0xEE][0xEA][0xEB][0xEC][0xE2][0xE2][0xE2][0xE2][0xE3][0xE3][0xE1][0xDF][0xE1][0xDE][0xE0][0xE0][0xE2][0xE0][0xE1][0xDF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0xFF][0x0D][0x0A]
+//19:29:50.905 DEBUG Sent to RFE: #[0x0A]Cb[0x01][0x1F][0x00][0x04][0x00][0x00]
+
+// https://web.archive.org/web/*/https://github.com/RFExplorer/RFExplorer-for-.NET/wiki/RF-Explorer-UART-API-interface-specification
+
+// https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFExplorer.py#L999
+/*
+#If it is a MODEL_WSUB3G, make sure we use the MAX HOLD mode to account for proper DSP
+self.m_eCalculator = objConfiguration.eCalculator
+time.sleep(0.5)
+if (self.m_bUseMaxHold):
+	if (self.m_eCalculator != RFE_Common.eCalculator.MAX_HOLD):
+		print("Updated remote mode to Max Hold for reliable DSP calculations with fast signals")
+		self.SendCommand_SetMaxHold()
+else:
+	if (self.m_eCalculator == RFE_Common.eCalculator.MAX_HOLD):
+		print("Remote mode is not Max Hold, some fast signals may not be detected")
+		self.SendCommand_Realtime()
+*/
 
 import (
 	"bytes"
@@ -15,10 +41,8 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
-
-	"github.com/jacobsa/go-serial/serial"
 )
 
 const MaxSpectrumSteps = 65535
@@ -26,16 +50,25 @@ const MaxSpectrumSteps = 65535
 type Model int
 
 const (
-	Model433M    Model = 0
-	Model868M    Model = 1
-	Model915M    Model = 2
-	ModelWSUB1G  Model = 3
-	Model24G     Model = 4
-	ModelWSUB3G  Model = 5
-	Model6G      Model = 6
-	ModelRFGen   Model = 60
-	ModelNone    Model = 255
-	ModelInvalid Model = -1
+	Model433M           Model = 0
+	Model868M           Model = 1
+	Model915M           Model = 2
+	ModelWSUB1G         Model = 3
+	Model24G            Model = 4
+	ModelWSUB3G         Model = 5
+	Model6G             Model = 6
+	ModelWSUB1GPlus     Model = 10
+	ModelAudioPro       Model = 11 // note from Python library: this is converted internally to MODEL_WSUB3G to simplify code, but sets m_bAudioPro to true
+	Model2400Plus       Model = 12
+	Model4GPlus         Model = 13
+	Model6GPlus         Model = 14
+	ModelW5G3G          Model = 16
+	ModelW5G4G          Model = 17
+	ModelW5G5G          Model = 18
+	ModelRFGen          Model = 60
+	ModelRFGenExpansion Model = 61
+	ModelNone           Model = 255
+	ModelInvalid        Model = -1
 )
 
 type Mode int
@@ -57,12 +90,21 @@ const (
 type CalculatorMode int
 
 const (
-	CalculatorModeNormal    CalculatorMode = 0
-	CalculatorModeMax       CalculatorMode = 1
-	CalculatorModeAvg       CalculatorMode = 2
-	CalculatorModeOverwrite CalculatorMode = 3
-	CalculatorModeMaxHold   CalculatorMode = 4
-	CalculatorModeInvalid   CalculatorMode = -1
+	CalculatorModeNormal        CalculatorMode = 0
+	CalculatorModeMax           CalculatorMode = 1
+	CalculatorModeAvg           CalculatorMode = 2
+	CalculatorModeOverwrite     CalculatorMode = 3
+	CalculatorModeMaxHold       CalculatorMode = 4
+	CalculatorModeMaxHistorical CalculatorMode = 5
+	CalculatorModeInvalid       CalculatorMode = -1
+)
+
+type WifiMode byte
+
+const (
+	WifiModeDisabled WifiMode = 0
+	WifiMode24GHz    WifiMode = 1
+	WifiMode5GHz     WifiMode = 2
 )
 
 type MarkerMode byte
@@ -87,6 +129,25 @@ func parseModulation(s string) Modulation {
 	i, _ := strconv.Atoi(s)
 	return Modulation(i)
 }
+
+type DSP byte
+
+const (
+	DSPAuto   DSP = 0
+	DSPFilter DSP = 1
+	DSPFast   DSP = 2
+	DSPNoImg  DSP = 3
+)
+
+type InputStage byte
+
+const (
+	InputStageDirect         InputStage = 0
+	InputStageAttenuator30dB InputStage = 1
+	InputStageLNA25dB        InputStage = 2
+	InputStageAttenuator60dB InputStage = 3
+	InputStageLNA12dB        InputStage = 4
+)
 
 type CurrentConfigPacket struct {
 	StartFreqKHZ    int
@@ -171,6 +232,14 @@ type EndOfPresetsPacket struct{}
 
 func (p *EndOfPresetsPacket) Type() string {
 	return "EndOfPresets"
+}
+
+type CurrentCalculatorMode struct {
+	Mode CalculatorMode
+}
+
+func (p *CurrentCalculatorMode) Type() string {
+	return "CurrentCalculatorMode"
 }
 
 type CurrentSnifferConfig struct {
@@ -267,8 +336,26 @@ func (m Model) String() string {
 		return "WSUB3G"
 	case Model6G:
 		return "6G"
+	case ModelWSUB1GPlus:
+		return "WSUB1G Plus"
+	case ModelAudioPro:
+		return "Audio Pro"
+	case Model2400Plus:
+		return "2400 Plus"
+	case Model4GPlus:
+		return "4G Plus"
+	case Model6GPlus:
+		return "6G Plus"
+	case ModelW5G3G:
+		return "ModelW5G3G"
+	case ModelW5G4G:
+		return "ModelW5G4G"
+	case ModelW5G5G:
+		return "ModelW5G5G"
 	case ModelRFGen:
 		return "RFE6GEN"
+	case ModelRFGenExpansion:
+		return "RFE6GEN Expansion"
 	case ModelNone:
 		return ""
 	case ModelInvalid:
@@ -317,6 +404,8 @@ func (m CalculatorMode) String() string {
 		return "Overwrite"
 	case CalculatorModeMaxHold:
 		return "MaxHold"
+	case CalculatorModeMaxHistorical:
+		return "MaxHistorical"
 	case CalculatorModeInvalid:
 		return "Invalid"
 	}
@@ -334,14 +423,6 @@ func (m MarkerMode) String() string {
 	}
 	return fmt.Sprintf("MarkerMode(%d)", int(m))
 }
-
-// class eDSP(Enum):
-//     """All possible DSP values
-// 	"""
-//     DSP_AUTO = 0
-//     DSP_FILTER = 1
-//     DSP_FAST = 2
-//     DSP_NO_IMG = 3
 
 // BaudRate is the serial communications baud rate configured on the RF Explorer.
 type BaudRate int
@@ -409,48 +490,48 @@ type Packet interface {
 }
 
 type RFExplorer struct {
-	port          io.ReadWriteCloser
-	writeBuf      []byte
-	closeCh       chan struct{}
-	readCh        chan Packet
-	config        atomic.Value // *CurrentConfigPacket
+	port    io.ReadWriteCloser
+	closeCh chan struct{}
+	readCh  chan Packet
+	// config        atomic.Value // *CurrentConfigPacket
 	endOfPresetCh chan struct{}
+
+	txMu     sync.Mutex
+	writeBuf []byte
+
+	mu                                          sync.RWMutex
+	mainBoardModel                              Model
+	expansionBoardModel                         Model
+	activeModel                                 Model
+	calculatorMode                              CalculatorMode
+	spectrumAnalyzerEmbeddedCalibrationOffsetDB []float64
 }
 
 // New initiates a connection to the RF Explorer over the provided device.
-// TODO: currently a baud rate of 500,000 is assumed.
-func New(device string) (*RFExplorer, error) {
-	options := serial.OpenOptions{
-		PortName:        device,
-		BaudRate:        500000,
-		DataBits:        8,
-		ParityMode:      serial.PARITY_NONE,
-		StopBits:        1,
-		MinimumReadSize: 1,
-	}
-
-	// Open the port.
-	port, err := serial.Open(options)
-	if err != nil {
-		return nil, err
-	}
-
+func New(port io.ReadWriteCloser) (*RFExplorer, error) {
 	rf := &RFExplorer{
 		port:          port,
 		writeBuf:      make([]byte, 256),
 		closeCh:       make(chan struct{}),
 		readCh:        make(chan Packet, 16),
 		endOfPresetCh: make(chan struct{}, 1),
+
+		mainBoardModel:      ModelNone,
+		expansionBoardModel: ModelNone,
+		activeModel:         ModelNone,
+		calculatorMode:      CalculatorModeNormal,
 	}
 	go rf.readLoop()
 
 	// Get the initial config
 	// TODO: this fails depending on mode
 	if err := rf.RequestConfig(); err != nil {
+		rf.Close()
 		return nil, err
 	}
 setupLoop:
 	for {
+		// TODO: timeout
 		pkt, ok := <-rf.Chan()
 		if !ok {
 			rf.Close()
@@ -458,8 +539,18 @@ setupLoop:
 		}
 		switch pkt := pkt.(type) {
 		case *CurrentConfigPacket:
-			rf.config.Store(pkt)
+			// rf.config.Store(pkt)
+			_ = pkt
+			if err := rf.RequestInternalCalibrationData(); err != nil {
+				rf.Close()
+				return nil, err
+			}
+			// TODO: wait for calibration data
 			break setupLoop
+			// case *UnhandledPacket:
+			// 	fmt.Println(hex.Dump(pkt.Data))
+			// default:
+			// 	fmt.Printf("%+#v\n", pkt)
 		}
 	}
 	return rf, nil
@@ -476,22 +567,16 @@ func (r *RFExplorer) Chan() chan Packet {
 	return r.readCh
 }
 
-func (r *RFExplorer) Config() *CurrentConfigPacket {
-	return r.config.Load().(*CurrentConfigPacket)
-}
+// func (r *RFExplorer) Config() *CurrentConfigPacket {
+// 	return r.config.Load().(*CurrentConfigPacket)
+// }
 
 // SetLCDEnabled requests RF Explorer to turn the LCD on or off.
 func (r *RFExplorer) SetLCDEnabled(enabled bool) error {
-	// #<Size>C(0|1)
-	r.writeBuf[0] = '#'
-	r.writeBuf[1] = 4
-	r.writeBuf[2] = 'L'
 	if enabled {
-		r.writeBuf[3] = '1'
-	} else {
-		r.writeBuf[3] = '0'
+		return r.SendCommand("L1")
 	}
-	return r.write(r.writeBuf[:4])
+	return r.SendCommand("L0")
 }
 
 // SetScreenDumpEnabled requests RF Explorer to dump all screen data
@@ -571,7 +656,7 @@ func (r *RFExplorer) UpdatePreset(ctx context.Context, p *Preset) error {
 		return err
 
 	}
-	// Way for end of presets
+	// Wait for end of presets
 	select {
 	case <-r.endOfPresetCh:
 	case <-ctx.Done():
@@ -580,7 +665,7 @@ func (r *RFExplorer) UpdatePreset(ctx context.Context, p *Preset) error {
 	return nil
 }
 
-// RequestInternalCalibrationData requests RF Explorer to send the currnet configuration.
+// RequestInternalCalibrationData requests RF Explorer to send the current configuration.
 func (r *RFExplorer) RequestInternalCalibrationData() error {
 	return r.SendCommand("Cq")
 }
@@ -625,6 +710,7 @@ func (r *RFExplorer) SetBaudRate(br BaudRate) error {
 	return fmt.Errorf("rfx: unknown baud rate %d", br)
 }
 
+// Realtime sets RF Explorer SA device in Calculator:Normal, this is useful to minimize spikes and spurs produced by unwanted signals
 func (r *RFExplorer) Realtime() error {
 	return r.SendCommand("C+\x00")
 }
@@ -633,8 +719,18 @@ func (r *RFExplorer) SetMaxHold() error {
 	return r.SendCommand("C+\x04")
 }
 
+func (r *RFExplorer) SetCalculatorMode(mode CalculatorMode) error {
+	return r.SendCommand(fmt.Sprintf("C+%c", byte(mode)))
+}
+
+func (r *RFExplorer) SetWifiMode(mode WifiMode) error {
+	return r.SendCommand(fmt.Sprintf("CW%d", byte(mode)))
+}
+
+// TODO: SetDSP	#<Size>Cp <DSP_Mode>	Request RF Explorer to set onboard DSP mode <Size>=5 bytes	1.12
+
 func (r *RFExplorer) Shutdown() error {
-	return r.SendCommand("CS")
+	return r.SendCommand("S") // or is it "CS"
 }
 
 func (r *RFExplorer) SetGeneratorPower(on bool) error {
@@ -644,13 +740,12 @@ func (r *RFExplorer) SetGeneratorPower(on bool) error {
 	return r.SendCommand("CP0")
 }
 
-// TODO: SetCalculator	#<Size>C+<CalcMode>	Request RF Explorer to set onboard calculator mode <Size>=5 bytes
-// TODO: SetDSP	#<Size>Cp <DSP_Mode>	Request RF Explorer to set onboard DSP mode <Size>=5 bytes	1.12
 // TODO: SetOffsetDB	#<Size>CO <OffsetDB>	Request RF Explorer to set onboard Amplitude Offset in dB <Size>=5 bytes
 // TODO: SetInputStage	#<Size>a <InputStage>	Request RF Explorer to set onboard input stage mode, available in WSUB1G+ and IoT models only <Size>=4 bytes
 // TODO: SetSweepPointsLarge	#<Size>Cj <Sample_points_large>	Request RF Explorer to change to new data point sweep size <Size>=6 bytes - this mode support sweep sizes up to 65536 data points
 
 // SetSweepPoints sets the number of sweep data points (16-4096, multiple of 16).
+// May only work with 112, 240, and 512 or may not do anything at all.
 func (r *RFExplorer) SetSweepPoints(steps int) error {
 	if steps < 16 {
 		steps = 16
@@ -673,6 +768,7 @@ func (r *RFExplorer) SetSweepPointsEx(steps int) error {
 }
 
 // SetAnalyzerConfig will change current configuration for RF Explorer and send current Spectrum Analyzer configuration data back to PC.
+// rbwKHZ is currently ignored by the firmware.
 func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZ int) error {
 	// #<Size>C2-F: <Start_Freq>, <End_Freq>, <Amp_Top>, <Amp_Bottom>, <RBW_KHZ>
 	// <Start_Freq>, <End_Freq> = 7 ascii digits, decimal
@@ -703,8 +799,8 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 		rbwKHZ = (endFreqKHZ - startFreqKHZ + steps/2) / steps
 		if rbwKHZ >= 3 && rbwKHZ < 620 {
 			rbwKHZStr = fmt.Sprintf(",%05d", rbwKHZ)
-		} else {
-			fmt.Printf("Ignored RBW %d Khz", rbwKHZ)
+			// } else {
+			// 	fmt.Printf("Ignored RBW %d Khz", rbwKHZ)
 		}
 	}
 
@@ -717,13 +813,18 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 	return nil
 }
 
-// Sample rate value should be in range 20,000 – 500,000 for OOK RAW modulation modes usually found in commercial devices, but some experimentation may be needed. This is the sample rate at which the internal decoder will detect activity – the higher this value the better capture resolution but at the cost of a shorter capture time lapse.
+// Sample rate value should be in range 20,000 – 500,000 for OOK RAW modulation modes usually found
+// in commercial devices, but some experimentation may be needed. This is the sample rate at which
+// the internal decoder will detect activity – the higher this value the better capture resolution
+// but at the cost of a shorter capture time lapse.
 func (r *RFExplorer) SetSnifferConfig(centerFreqKHZ int, sampleRate int) error {
 	return nil // TODO
 }
 
 // SendCommand sends a "#" command to the RF Explorer
 func (r *RFExplorer) SendCommand(cmd string) error {
+	r.txMu.Lock()
+	defer r.txMu.Unlock()
 	if len(cmd) > 253 {
 		return fmt.Errorf("rfx: command may not exceed a length of 253, got %d", len(cmd))
 	}
@@ -734,6 +835,34 @@ func (r *RFExplorer) SendCommand(cmd string) error {
 	r.writeBuf[1] = byte(2 + len(cmd))
 	copy(r.writeBuf[2:], cmd)
 	return r.write(r.writeBuf[:2+len(cmd)])
+}
+
+// ActiveModel returns the currently active board model.
+func (r *RFExplorer) ActiveModel() Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.activeModel
+}
+
+// MainBoardModel returns the model of the main board.
+func (r *RFExplorer) MainBoardModel() Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.mainBoardModel
+}
+
+// ExpansionBoardModel returns the model of the expansion board.
+func (r *RFExplorer) ExpansionBoardModel() Model {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.expansionBoardModel
+}
+
+// CalculatorMode returns the current calculator mode.
+func (r *RFExplorer) CalculatorMode() CalculatorMode {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.calculatorMode
 }
 
 func (r *RFExplorer) write(b []byte) error {
@@ -793,6 +922,66 @@ func (r *RFExplorer) readLoop() {
 			case '$':
 				// TODO: $C?
 				switch b[1] {
+				case 'q', 'Q':
+					// Embedded calibration data
+					// https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFExplorer.py#L1115
+
+					sourceStringSize := int(b[2])
+					if b[1] == 'Q' {
+						sourceStringSize += int(b[3]) << 8
+					}
+
+					// if (self.IsGenerator()):
+					//  	 #signal generator uses a different approach for storing absolute amplitude value offset over an ideal -30dBm response
+					//  	 if ((self.m_RFGenCal.GetCalSize() < 0) or (self.m_RFGenCal.GetCalSize() != nSourceStringSize)):
+					// 			sData = self.m_RFGenCal.InitializeCal(nSourceStringSize, sLine)
+					// 			print("Embedded calibration Signal Generator data received: " + sData, True)
+					// elif (self.m_eActiveModel == RFE_Common.eModel.MODEL_6G or self.m_eActiveModel == RFE_Common.eModel.MODEL_WSUB1G or self.m_eActiveModel == RFE_Common.eModel.MODEL_WSUB1G_PLUS or self.IsMWSUB3G):
+					// 	sData = "Embedded calibration Spectrum Analyzer data received:"
+					nStartPositionCalData := 0
+					nStopPositionCalData := sourceStringSize
+					switch r.ActiveModel() {
+					case Model6G:
+						nStartPositionCalData = posInternalCalibrated6G
+					case ModelWSUB1G:
+						nStartPositionCalData = posInternalCalibratedWSUB1G
+						nStopPositionCalData = posEndInternalCalibratedWSUB1G
+					case ModelWSUB1GPlus:
+						nStartPositionCalData = posInternalCalibratedWSUB1GPlus
+						nStopPositionCalData = posEndInternalCalibratedWSUB1GPlus
+					case ModelWSUB3G:
+						nStartPositionCalData = posInternalCalibratedMWSUB3G
+					}
+
+					if len(b) < nStopPositionCalData && eolIdx < nStopPositionCalData {
+						break decodeLoop
+					}
+
+					nAdjustSize := 3
+					if b[1] == 'Q' {
+						nAdjustSize = 4 // this accounts for extra byte sent in $Q for size
+					}
+					bAllZero := true
+					calOffsetDB := make([]float64, 0, nStopPositionCalData-nStartPositionCalData)
+					for i := nStartPositionCalData; i < nStopPositionCalData; i++ {
+						nVal := int8(b[i+nAdjustSize])
+						if nVal != 0 {
+							bAllZero = false
+						}
+						calOffsetDB = append(calOffsetDB, float64(nVal)/2.0) // split by two to get dB
+					}
+
+					r.mu.Lock()
+					r.spectrumAnalyzerEmbeddedCalibrationOffsetDB = calOffsetDB
+					r.mu.Unlock()
+
+					if bAllZero {
+						// TODO
+						fmt.Println("ERROR: the device internal calibration data is missing! contact support at www.rf-explorer.com/contact")
+					}
+
+					// TODO: r.handlePacket(...)
+					handled = true
 				case 'D':
 					if len(b) < 0x404 {
 						break decodeLoop
@@ -879,8 +1068,16 @@ func (r *RFExplorer) readLoop() {
 
 				switch b[1] {
 				case 'C':
-
-					if len(b) > 6 {
+					// TODO #C+ -- calculator mode set by software
+					if len(b) == 4 && b[2] == '+' {
+						// #C+{mode} - Calculator mode
+						calcMode := CalculatorMode(b[3])
+						r.mu.Lock()
+						r.calculatorMode = calcMode
+						r.mu.Unlock()
+						r.handlePacket(&CurrentCalculatorMode{Mode: calcMode})
+						handled = true
+					} else if len(b) > 6 {
 						switch b[2] {
 						case '2': // Spectrum Analyzer mode
 							if b[3] == '-' && b[5] == ':' {
@@ -907,6 +1104,14 @@ func (r *RFExplorer) readLoop() {
 										AmpOffset:       parseASCIIDecimal(p[11]),
 										CalculatorMode:  parseCalculatorMode(p[12]),
 									}
+									r.mu.Lock()
+									if config.ExpModuleActive {
+										r.activeModel = r.expansionBoardModel
+									} else {
+										r.activeModel = r.mainBoardModel
+									}
+									r.calculatorMode = config.CalculatorMode
+									r.mu.Unlock()
 									r.handlePacket(config)
 									handled = true
 								case 'M':
@@ -924,13 +1129,20 @@ func (r *RFExplorer) readLoop() {
 									if len(p) >= 3 {
 										setup.FirmwareVersion = strings.TrimLeft(p[2], "0")
 									}
+
+									r.mu.Lock()
+									r.mainBoardModel = setup.Model
+									r.expansionBoardModel = setup.ExpansionModel
+									r.mu.Unlock()
+
 									r.handlePacket(setup)
 									handled = true
 								}
 							}
 						// case '3': // Signal generator CW, SweepFreq and SweepAmp modes // TODO: #C3- https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFEConfiguration.py#L136
+						// https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFExplorer.py#L1181
 						case '4': // Sniffer mode
-							// TODO: #C4- https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFEConfiguration.py#L190
+							// TODO: #C4- https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFEConfiguration.py#L269
 							// self.fStartMHZ = int(sLine[6:13]) / 1000.0 #note it comes in KHZ
 							// self.bExpansionBoardActive = (sLine[14] == '1')
 							// self.m_eMode = RFE_Common.eMode(int(sLine[16:19]))
@@ -974,6 +1186,7 @@ func (r *RFExplorer) readLoop() {
 						select {
 						case r.endOfPresetCh <- struct{}{}:
 						default:
+							fmt.Println("end of preset channel full")
 						}
 						r.handlePacket(&EndOfPresetsPacket{})
 						handled = true
@@ -995,3 +1208,17 @@ func (r *RFExplorer) readLoop() {
 		}
 	}
 }
+
+/*
+	// Returns the frequency corresponding to the index idx
+	public float GetFrequency(int idx, int sweep_steps)
+	{
+		float ris = (float)Start_Freq;
+		if(idx>0)
+		{
+			ris = ris + idx * ((float)(End_Freq - Start_Freq)/(float)sweep_steps);
+		}
+		ris = (ris / 1000.0f);            // freq. in MHz
+		return(ris);
+	}
+*/

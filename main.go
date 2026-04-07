@@ -4,7 +4,6 @@ package main
 // https://en.wikipedia.org/wiki/List_of_WLAN_channels#5.C2.A0GHz_.28802.11a.2Fh.2Fj.2Fn.2Fac.29.5B18.5D
 
 import (
-	"context"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
-	"time"
 
 	termbox "github.com/nsf/termbox-go"
 	"github.com/samuel/rfexplorer/rfx"
@@ -167,7 +165,12 @@ var vtx58Channels = []channel{
 // }
 
 func main() {
-	rfe, err := rfx.New("/dev/tty.SLAB_USBtoUART")
+	// rfe, err := rfx.New("/dev/tty.SLAB_USBtoUART")
+	port, err := rfx.OpenSerial("/dev/tty.usbserial-0001")
+	if err != nil {
+		log.Fatal(err)
+	}
+	rfe, err := rfx.New(port)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -334,6 +337,7 @@ func main() {
 						} else {
 							atomic.StoreUint32(&wifi24, 0)
 						}
+					}
 				}
 			}
 		}
@@ -427,7 +431,7 @@ func main() {
 				// 		x := freqToX(cf.centerFreqHz)
 				// 		y := top
 				// 		putString(x, y, cf.name, termbox.ColorWhite, termbox.ColorBlack)
-				// 		for y++; y < height-1; y++ {
+				// 		for y++; y < height276-1; y++ {
 				// 			termbox.SetCell(x, y, '|', termbox.ColorWhite, termbox.ColorBlack)
 				// 		}
 				// 	}
