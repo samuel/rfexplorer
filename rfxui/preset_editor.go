@@ -86,7 +86,6 @@ func (d *enumDropdown) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 	// Option rows shown when open.
 	if d.open {
 		for i := range d.items {
-			i := i
 			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				return d.items[i].Layout(gtx, func(gtx layout.Context) layout.Dimensions {

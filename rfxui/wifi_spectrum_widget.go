@@ -99,7 +99,7 @@ func (sw *WifiSpectrumWidget) Layout(gtx layout.Context) layout.Dimensions {
 		if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != len(sw.values) || sw.heatMapImg.Bounds().Dy() != heatMapHeight {
 			sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, len(sw.values), heatMapHeight))
 		}
-		for y := 0; y < heatMapHeight; y++ {
+		for y := range heatMapHeight {
 			for x := 0; x < len(sw.values); x++ {
 				var v float64
 				if sw.heatMapMax > 0 {

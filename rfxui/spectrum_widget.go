@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"gioui.org/f32"
+	"gioui.org/io/event"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -28,6 +30,7 @@ type SpectrumWidget struct {
 	heatMapMax     int
 	startFreqKHz   int
 	freqStepHz     int
+	hoverX         int
 }
 
 func NewSpectrumWidget() *SpectrumWidget {
@@ -36,6 +39,7 @@ func NewSpectrumWidget() *SpectrumWidget {
 		max:            0,
 		maxHold:        true,
 		heatMapEnabled: true,
+		hoverX:         -1,
 	}
 	return sw
 }
@@ -93,6 +97,50 @@ func (sw *SpectrumWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
 	sw.freqStepHz = freqStepHz
 }
 
+const (
+	markerTriHalf = 8
+	markerTriH    = 10
+	markerGap     = 3
+	markerLabelW  = 220
+)
+
+// drawMarker draws a downward-pointing triangle at (pixelX, tipY) and a label
+// to the right (or left if near the edge). widgetW is the full widget width in
+// pixels.
+func drawMarker(gtx layout.Context, th *material.Theme, pixelX, tipY, widgetW int, label string, col color.NRGBA) {
+	triTip := tipY - markerGap
+	triBase := triTip - markerTriH
+
+	var tpath clip.Path
+	tpath.Begin(gtx.Ops)
+	tpath.MoveTo(f32.Pt(float32(pixelX), float32(triTip)))
+	tpath.LineTo(f32.Pt(float32(pixelX-markerTriHalf), float32(triBase)))
+	tpath.LineTo(f32.Pt(float32(pixelX+markerTriHalf), float32(triBase)))
+	tpath.Close()
+	paint.FillShape(gtx.Ops, col, clip.Outline{Path: tpath.End()}.Op())
+
+	labelX := pixelX + markerTriHalf + 4
+	if labelX+markerLabelW > widgetW {
+		labelX = pixelX - markerTriHalf - 4 - markerLabelW
+	}
+	labelY := max(triBase-2-50, 0)
+
+	bgRect := image.Rectangle{
+		Min: image.Pt(labelX-2, labelY-2),
+		Max: image.Pt(labelX+markerLabelW+2, labelY+34),
+	}
+	paint.FillShape(gtx.Ops, color.NRGBA{A: 0xb0}, clip.Rect(bgRect).Op())
+
+	stack := op.Offset(image.Pt(labelX, labelY)).Push(gtx.Ops)
+	gtxLabel := gtx
+	gtxLabel.Constraints.Min.X = 0
+	gtxLabel.Constraints.Max.X = markerLabelW
+	l := material.Body2(th, label)
+	l.Color = col
+	l.Layout(gtxLabel)
+	stack.Pop()
+}
+
 func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
 	gtx.Execute(op.InvalidateCmd{})
 
@@ -100,12 +148,37 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 
 	w, h := gtx.Constraints.Max.X, gtx.Constraints.Max.Y
 
+	// Register pointer input over the full widget area.
+	hitArea := clip.Rect(image.Rectangle{Max: image.Pt(w, h)}).Push(gtx.Ops)
+	event.Op(gtx.Ops, sw)
+	hitArea.Pop()
+
+	// Process pointer events to track hover position.
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: sw,
+			Kinds:  pointer.Move | pointer.Enter | pointer.Leave | pointer.Cancel,
+		})
+		if !ok {
+			break
+		}
+		switch e := ev.(type) {
+		case pointer.Event:
+			switch e.Kind {
+			case pointer.Move, pointer.Enter:
+				sw.hoverX = int(e.Position.X)
+			case pointer.Leave, pointer.Cancel:
+				sw.hoverX = -1
+			}
+		}
+	}
+
 	if sw.heatMapEnabled {
 		if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != len(sw.values) || sw.heatMapImg.Bounds().Dy() != heatMapHeight {
 			sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, len(sw.values), heatMapHeight))
 		}
-		for y := 0; y < heatMapHeight; y++ {
-			for x := 0; x < len(sw.values); x++ {
+		for y := range heatMapHeight {
+			for x := range len(sw.values) {
 				var v float64
 				if sw.heatMapMax > 0 {
 					v = float64(sw.heatMap[((heatMapHeight-1)-y)*len(sw.values)+x]) / float64(sw.heatMapMax)
@@ -216,54 +289,34 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 		peakX := peakIdx * (w - 1) / (len(sw.maxValues) - 1)
 		peakY := (h - 1) - int(float64(h-1)*peakA)
 
-		// Downward-pointing triangle sitting just above the peak.
-		const (
-			triHalf = 8
-			triH    = 10
-			gap     = 3
-		)
-		triTip := peakY - gap
-		triBase := triTip - triH
-
-		var tpath clip.Path
-		tpath.Begin(gtx.Ops)
-		tpath.MoveTo(f32.Pt(float32(peakX), float32(triTip)))
-		tpath.LineTo(f32.Pt(float32(peakX-triHalf), float32(triBase)))
-		tpath.LineTo(f32.Pt(float32(peakX+triHalf), float32(triBase)))
-		tpath.Close()
-		paint.FillShape(gtx.Ops, color.NRGBA{R: 0xff, G: 0xe0, B: 0x00, A: 0xff},
-			clip.Outline{Path: tpath.End()}.Op())
-
-		// Label: frequency and power.
 		freqMHz := (float64(sw.startFreqKHz) + float64(peakIdx)*float64(sw.freqStepHz)/1000.0) / 1000.0
 		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", freqMHz, peakVal)
+		drawMarker(gtx, th, peakX, peakY, w, label, color.NRGBA{R: 0xff, G: 0xe0, B: 0x00, A: 0xff})
+	}
 
-		const labelW = 220
-		labelX := peakX + triHalf + 4
-		if labelX+labelW > w {
-			labelX = peakX - triHalf - 4 - labelW
+	// Hover marker: show frequency and power at the cursor position.
+	if sw.hoverX >= 0 && len(sw.values) > 1 && sw.freqStepHz > 0 {
+		// Map pixel x back to sample index.
+		hoverIdx := sw.hoverX * (len(sw.values) - 1) / (w - 1)
+		if hoverIdx < 0 {
+			hoverIdx = 0
+		} else if hoverIdx >= len(sw.values) {
+			hoverIdx = len(sw.values) - 1
 		}
-		labelY := triBase - 2 - 50
-		if labelY < 0 {
-			labelY = 0
-		}
+		hoverVal := sw.values[hoverIdx]
 
-		// Dark background behind the label for readability.
-		bgRect := image.Rectangle{
-			Min: image.Pt(labelX-2, labelY-2),
-			Max: image.Pt(labelX+labelW+2, labelY+34),
+		hoverA := (hoverVal - sw.min) / (sw.max - sw.min)
+		if hoverA < 0 {
+			hoverA = 0
+		} else if hoverA > 1 {
+			hoverA = 1
 		}
-		paint.FillShape(gtx.Ops, color.NRGBA{A: 0xb0},
-			clip.Rect(bgRect).Op())
+		hoverPixX := hoverIdx * (w - 1) / (len(sw.values) - 1)
+		hoverPixY := (h - 1) - int(float64(h-1)*hoverA)
 
-		stack := op.Offset(image.Pt(labelX, labelY)).Push(gtx.Ops)
-		gtxLabel := gtx
-		gtxLabel.Constraints.Min.X = 0
-		gtxLabel.Constraints.Max.X = labelW
-		l := material.Body2(th, label)
-		l.Color = color.NRGBA{R: 0xff, G: 0xe0, B: 0x00, A: 0xff}
-		l.Layout(gtxLabel)
-		stack.Pop()
+		freqMHz := (float64(sw.startFreqKHz) + float64(hoverIdx)*float64(sw.freqStepHz)/1000.0) / 1000.0
+		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", freqMHz, hoverVal)
+		drawMarker(gtx, th, hoverPixX, hoverPixY, w, label, color.NRGBA{R: 0x00, G: 0xff, B: 0xff, A: 0xff})
 	}
 
 	return layout.Dimensions{Size: gtx.Constraints.Max}
