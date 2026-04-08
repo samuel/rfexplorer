@@ -56,6 +56,8 @@ type SpectrumWidget struct {
 	freqStepHz     int
 	hoverX         int
 	bandSet        *rfxbands.BandSet
+	highlightLoKHz int
+	highlightHiKHz int
 }
 
 func NewSpectrumWidget() *SpectrumWidget {
@@ -122,11 +124,27 @@ func (sw *SpectrumWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
 	sw.freqStepHz = freqStepHz
 }
 
-// SetBandSet sets the channel overlay band set. Pass nil to clear the overlay.
+// SetBandSet sets the active band set (used for highlight range mapping). Pass nil to clear.
 func (sw *SpectrumWidget) SetBandSet(bs *rfxbands.BandSet) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	sw.bandSet = bs
+}
+
+// SetHighlight marks a frequency range (in kHz) to highlight in the spectrum.
+func (sw *SpectrumWidget) SetHighlight(loKHz, hiKHz int) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.highlightLoKHz = loKHz
+	sw.highlightHiKHz = hiKHz
+}
+
+// ClearHighlight removes any active frequency highlight.
+func (sw *SpectrumWidget) ClearHighlight() {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.highlightLoKHz = 0
+	sw.highlightHiKHz = 0
 }
 
 const (
@@ -259,59 +277,21 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
-	// Channel overlay: draw translucent band rects and labels when a BandSet is active.
-	if sw.bandSet != nil && sw.freqStepHz > 0 && len(sw.values) > 1 {
+	// Highlight rect: draw a translucent overlay for the selected channel range.
+	if sw.highlightLoKHz != sw.highlightHiKHz && sw.freqStepHz > 0 && len(sw.values) > 1 {
 		startHz := sw.startFreqKHz * 1000
-		n := len(sw.values) - 1 // number of steps across the widget width
-
-		// hzToPixel converts a frequency in Hz to a pixel X coordinate.
+		n := len(sw.values) - 1
 		hzToPixel := func(hz int) int {
 			return (hz - startHz) * (w - 1) / (sw.freqStepHz * n)
 		}
-
-		for bi, band := range sw.bandSet.Bands {
-			fillCol := bandFillColor(bi)
-			labelCol := bandLabelColor(bi)
-			for _, ch := range band.Channels {
-				leftX := hzToPixel(ch.CenterKHz*1000 - ch.WidthKHz*1000/2)
-				rightX := hzToPixel(ch.CenterKHz*1000 + ch.WidthKHz*1000/2)
-				if rightX < 0 || leftX > w {
-					continue
-				}
-				leftX = max(leftX, 0)
-				rightX = min(rightX, w)
-
-				// Translucent fill across the channel bandwidth.
-				paint.FillShape(gtx.Ops, fillCol,
-					clip.Rect(image.Rectangle{
-						Min: image.Pt(leftX, 0),
-						Max: image.Pt(rightX, h),
-					}).Op())
-
-				// Center-line hairline.
-				centerX := hzToPixel(ch.CenterKHz * 1000)
-				if centerX >= 0 && centerX < w {
-					var lp clip.Path
-					lp.Begin(gtx.Ops)
-					lp.MoveTo(f32.Pt(float32(centerX), 0))
-					lp.LineTo(f32.Pt(float32(centerX), float32(h)))
-					lineCol := labelCol
-					lineCol.A = 0x60
-					paint.FillShape(gtx.Ops, lineCol, clip.Stroke{Path: lp.End(), Width: 1}.Op())
-				}
-
-				// Channel label (band name + channel name), offset one line per band.
-				labelW := max(rightX-leftX, 1)
-				labelY := 2 + bi*gtx.Sp(14)
-				stack := op.Offset(image.Pt(leftX, labelY)).Push(gtx.Ops)
-				gtxLabel := gtx
-				gtxLabel.Constraints.Min.X = 0
-				gtxLabel.Constraints.Max.X = labelW
-				l := material.Body2(th, band.Name+ch.Name)
-				l.Color = labelCol
-				l.Layout(gtxLabel)
-				stack.Pop()
-			}
+		leftX := max(hzToPixel(sw.highlightLoKHz*1000), 0)
+		rightX := min(hzToPixel(sw.highlightHiKHz*1000), w)
+		if leftX < rightX {
+			paint.FillShape(gtx.Ops, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x28},
+				clip.Rect(image.Rectangle{
+					Min: image.Pt(leftX, 0),
+					Max: image.Pt(rightX, h),
+				}).Op())
 		}
 	}
 

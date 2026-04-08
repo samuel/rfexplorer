@@ -156,7 +156,7 @@ func main() {
 	go func() {
 		w := new(app.Window)
 		w.Option(app.Title("RF-Explorer"))
-		w.Option(app.Size(unit.Dp(1024), unit.Dp(1024)))
+		w.Option(app.Size(unit.Dp(1200), unit.Dp(1024)))
 		if err := ui.Run(w); err != nil {
 			log.Println(err)
 			os.Exit(1)

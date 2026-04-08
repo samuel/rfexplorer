@@ -73,9 +73,10 @@ func layoutEditorField(gtx layout.Context, th *material.Theme, ed *widget.Editor
 }
 
 type UI struct {
-	Theme     *material.Theme
-	Waterfall *WaterfallWidget
-	Spectrum  *SpectrumWidget
+	Theme           *material.Theme
+	Waterfall       *WaterfallWidget
+	Spectrum        *SpectrumWidget
+	ChannelOverview *ChannelOverviewWidget
 	// WifiSpectrum *WifiSpectrumWidget
 
 	mu                   sync.RWMutex
@@ -159,6 +160,7 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 	w := NewWaterfall(112, 256, -120, 0, true, true)
 	ui.Waterfall = NewWaterfallWidget(w)
 	ui.Spectrum = NewSpectrumWidget()
+	ui.ChannelOverview = NewChannelOverviewWidget()
 	// ui.WifiSpectrum = NewWifiSpectrumWidget(2400000, 2495000, ui.Theme)
 	return ui
 }
@@ -195,6 +197,7 @@ func (ui *UI) setRFEConfig(cfg rfx.CurrentConfigPacket) {
 	ui.expModuleActive = cfg.ExpModuleActive
 	ui.expModuleSwitch.Value = cfg.ExpModuleActive
 	ui.Spectrum.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
+	ui.ChannelOverview.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
 	centerFreqMHZ := float64(1000*cfg.StartFreqKHZ+cfg.FreqStepHZ*(cfg.SweepSteps-1)/2) / 1e6
 	ui.centerFrequencyInput.SetText(strconv.FormatFloat(centerFreqMHZ+0.0004, 'f', 3, 64))
 	freqSpanMHZ := float64((cfg.SweepSteps-1)*cfg.FreqStepHZ) / 1e6
@@ -233,6 +236,7 @@ func (ui *UI) Run(w *app.Window) error {
 			case *rfx.SweepDataPacket:
 				ui.Waterfall.w.Update(pkt.Samples)
 				ui.Spectrum.Update(pkt.Samples)
+				ui.ChannelOverview.Update(pkt.Samples)
 				// ui.WifiSpectrum.Update(pkt.Samples)
 			case *rfx.CurrentConfigPacket:
 				ui.setRFEConfig(*pkt)
@@ -271,6 +275,14 @@ func (ui *UI) Run(w *app.Window) error {
 			gtx := app.NewContext(&ops, e)
 			ui.Layout(gtx)
 			e.Frame(gtx.Ops)
+
+			// Sync channel selection highlight to spectrum after layout
+			// processes click events.
+			if lo, hi, ok := ui.ChannelOverview.SelectedRange(); ok {
+				ui.Spectrum.SetHighlight(lo, hi)
+			} else {
+				ui.Spectrum.ClearHighlight()
+			}
 
 			if ui.lcdSwitch.Value != ui.lcdEnabled {
 				ui.lcdEnabled = ui.lcdSwitch.Value
@@ -315,7 +327,9 @@ func (ui *UI) Run(w *app.Window) error {
 				}
 				bandSetName := pe.SelectedBandSetName()
 				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
-				ui.Spectrum.SetBandSet(ui.bandSetByName(bandSetName))
+				bs := ui.bandSetByName(bandSetName)
+				ui.Spectrum.SetBandSet(bs)
+				ui.ChannelOverview.SetBandSet(bs)
 				ui.saveUIConfig()
 			}
 			if pe.PendingSave {
@@ -323,7 +337,9 @@ func (ui *UI) Run(w *app.Window) error {
 				p := pe.ToPreset()
 				bandSetName := pe.SelectedBandSetName()
 				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
-				ui.Spectrum.SetBandSet(ui.bandSetByName(bandSetName))
+				bs := ui.bandSetByName(bandSetName)
+				ui.Spectrum.SetBandSet(bs)
+				ui.ChannelOverview.SetBandSet(bs)
 				ui.saveUIConfig()
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -446,6 +462,9 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					return ui.Spectrum.Layout(gtx, th)
 					// return ui.WifiSpectrum.Layout(gtx)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return ui.ChannelOverview.Layout(gtx, th)
 				}),
 				// layout.Rigid(layout.Spacer{Height: defaultMargin}.Layout),
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
