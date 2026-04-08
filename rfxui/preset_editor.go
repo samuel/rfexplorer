@@ -12,6 +12,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/samuel/rfexplorer/rfx"
+	"github.com/samuel/rfexplorer/rfxbands"
 )
 
 var (
@@ -25,6 +26,7 @@ var (
 type enumDropdown struct {
 	labels   []string
 	Selected int
+	Changed  bool
 	open     bool
 	header   widget.Clickable
 	items    []widget.Clickable
@@ -39,12 +41,16 @@ func newEnumDropdown(labels []string, selected int) *enumDropdown {
 }
 
 func (d *enumDropdown) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	d.Changed = false
 	if d.header.Clicked(gtx) {
 		d.open = !d.open
 	}
 	for i := range d.items {
 		if d.items[i].Clicked(gtx) {
-			d.Selected = i
+			if d.Selected != i {
+				d.Selected = i
+				d.Changed = true
+			}
 			d.open = false
 		}
 	}
@@ -86,6 +92,7 @@ func (d *enumDropdown) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 	// Option rows shown when open.
 	if d.open {
 		for i := range d.items {
+			i := i
 			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				return d.items[i].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -134,6 +141,8 @@ type presetEditor struct {
 	mainboardSwitch     *widget.Bool
 	calcModeDropdown    *enumDropdown
 	markerModeDropdown  *enumDropdown
+	bandSets            []*rfxbands.BandSet
+	bandSetDropdown     *enumDropdown
 
 	applyBtn  widget.Clickable
 	saveBtn   widget.Clickable
@@ -160,8 +169,40 @@ func newPresetEditor() *presetEditor {
 		mainboardSwitch:     &widget.Bool{},
 		calcModeDropdown:    newEnumDropdown(calcModeLabels, 0),
 		markerModeDropdown:  newEnumDropdown(markerModeLabels, 0),
+		bandSetDropdown:     newEnumDropdown([]string{"(none)"}, 0),
 		list:                widget.List{List: layout.List{Axis: layout.Vertical}},
 	}
+}
+
+// SetBandSets updates the available band sets shown in the channel overlay
+// dropdown. Call this once after loading band sets at startup.
+func (e *presetEditor) SetBandSets(sets []*rfxbands.BandSet) {
+	labels := make([]string, 1+len(sets))
+	labels[0] = "(none)"
+	for i, bs := range sets {
+		labels[i+1] = bs.Name
+	}
+	e.bandSets = sets
+	e.bandSetDropdown = newEnumDropdown(labels, 0)
+}
+
+// SelectedBandSetName returns the name of the currently selected BandSet, or
+// "" if none is selected.
+func (e *presetEditor) SelectedBandSetName() string {
+	if e.bandSetDropdown.Selected == 0 {
+		return ""
+	}
+	return e.bandSets[e.bandSetDropdown.Selected-1].Name
+}
+
+func (e *presetEditor) setBandSetByName(name string) {
+	for i, bs := range e.bandSets {
+		if bs.Name == name {
+			e.bandSetDropdown.Selected = i + 1
+			return
+		}
+	}
+	e.bandSetDropdown.Selected = 0
 }
 
 func calcModeIndex(m rfx.CalculatorMode) int {
@@ -171,7 +212,7 @@ func calcModeIndex(m rfx.CalculatorMode) int {
 	return int(m)
 }
 
-func (e *presetEditor) OpenPreset(p *rfx.Preset) {
+func (e *presetEditor) OpenPreset(p *rfx.Preset, bandSetName string) {
 	e.Active = true
 	e.IsNew = false
 	e.Index = p.Index
@@ -186,9 +227,11 @@ func (e *presetEditor) OpenPreset(p *rfx.Preset) {
 	e.calcModeDropdown.open = false
 	e.markerModeDropdown.Selected = int(p.MarkerMode)
 	e.markerModeDropdown.open = false
+	e.bandSetDropdown.open = false
+	e.setBandSetByName(bandSetName)
 }
 
-func (e *presetEditor) OpenNew(index int) {
+func (e *presetEditor) OpenNew(index int, bandSetName string) {
 	e.Active = true
 	e.IsNew = true
 	e.Index = index
@@ -203,6 +246,8 @@ func (e *presetEditor) OpenNew(index int) {
 	e.calcModeDropdown.open = false
 	e.markerModeDropdown.Selected = 0
 	e.markerModeDropdown.open = false
+	e.bandSetDropdown.open = false
+	e.setBandSetByName(bandSetName)
 }
 
 // ToPreset reads the current form state into a Preset value.
@@ -275,6 +320,16 @@ func (e *presetEditor) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 		}},
 		{"Marker Mode", func(gtx layout.Context) layout.Dimensions {
 			return e.markerModeDropdown.Layout(gtx, th)
+		}},
+		{"Channel Overlay", func(gtx layout.Context) layout.Dimensions {
+			dims := e.bandSetDropdown.Layout(gtx, th)
+			if e.bandSetDropdown.Changed && e.bandSetDropdown.Selected > 0 {
+				bs := e.bandSets[e.bandSetDropdown.Selected-1]
+				minKHz, maxKHz := bs.SpanKHz()
+				e.minFreqInput.SetText(strconv.Itoa(minKHz))
+				e.maxFreqInput.SetText(strconv.Itoa(maxKHz))
+			}
+			return dims
 		}},
 		{"", func(gtx layout.Context) layout.Dimensions {
 			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,

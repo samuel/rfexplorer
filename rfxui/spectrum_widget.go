@@ -14,9 +14,33 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/widget/material"
+	"github.com/samuel/rfexplorer/rfxbands"
 )
 
 const heatMapHeight = 256
+
+// bandBaseColors is the color palette used to distinguish bands in an overlay.
+// Each entry is an RGB triple; alpha is applied separately for fills vs labels.
+var bandBaseColors = [][3]uint8{
+	{0xff, 0x80, 0x00}, // orange
+	{0x00, 0xcc, 0x44}, // green
+	{0xcc, 0x44, 0xff}, // purple
+	{0x00, 0xcc, 0xcc}, // cyan
+	{0xff, 0xff, 0x00}, // yellow
+	{0xff, 0x44, 0x44}, // red
+	{0x44, 0x88, 0xff}, // blue
+	{0x88, 0xff, 0x44}, // lime
+}
+
+func bandFillColor(i int) color.NRGBA {
+	c := bandBaseColors[i%len(bandBaseColors)]
+	return color.NRGBA{R: c[0], G: c[1], B: c[2], A: 0x28}
+}
+
+func bandLabelColor(i int) color.NRGBA {
+	c := bandBaseColors[i%len(bandBaseColors)]
+	return color.NRGBA{R: c[0], G: c[1], B: c[2], A: 0xff}
+}
 
 type SpectrumWidget struct {
 	mu             sync.Mutex
@@ -31,6 +55,7 @@ type SpectrumWidget struct {
 	startFreqKHz   int
 	freqStepHz     int
 	hoverX         int
+	bandSet        *rfxbands.BandSet
 }
 
 func NewSpectrumWidget() *SpectrumWidget {
@@ -95,6 +120,13 @@ func (sw *SpectrumWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
 	defer sw.mu.Unlock()
 	sw.startFreqKHz = startFreqKHz
 	sw.freqStepHz = freqStepHz
+}
+
+// SetBandSet sets the channel overlay band set. Pass nil to clear the overlay.
+func (sw *SpectrumWidget) SetBandSet(bs *rfxbands.BandSet) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.bandSet = bs
 }
 
 const (
@@ -226,6 +258,62 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
+
+	// Channel overlay: draw translucent band rects and labels when a BandSet is active.
+	if sw.bandSet != nil && sw.freqStepHz > 0 && len(sw.values) > 1 {
+		startHz := sw.startFreqKHz * 1000
+		n := len(sw.values) - 1 // number of steps across the widget width
+
+		// hzToPixel converts a frequency in Hz to a pixel X coordinate.
+		hzToPixel := func(hz int) int {
+			return (hz - startHz) * (w - 1) / (sw.freqStepHz * n)
+		}
+
+		for bi, band := range sw.bandSet.Bands {
+			fillCol := bandFillColor(bi)
+			labelCol := bandLabelColor(bi)
+			for _, ch := range band.Channels {
+				leftX := hzToPixel(ch.CenterKHz*1000 - ch.WidthKHz*1000/2)
+				rightX := hzToPixel(ch.CenterKHz*1000 + ch.WidthKHz*1000/2)
+				if rightX < 0 || leftX > w {
+					continue
+				}
+				leftX = max(leftX, 0)
+				rightX = min(rightX, w)
+
+				// Translucent fill across the channel bandwidth.
+				paint.FillShape(gtx.Ops, fillCol,
+					clip.Rect(image.Rectangle{
+						Min: image.Pt(leftX, 0),
+						Max: image.Pt(rightX, h),
+					}).Op())
+
+				// Center-line hairline.
+				centerX := hzToPixel(ch.CenterKHz * 1000)
+				if centerX >= 0 && centerX < w {
+					var lp clip.Path
+					lp.Begin(gtx.Ops)
+					lp.MoveTo(f32.Pt(float32(centerX), 0))
+					lp.LineTo(f32.Pt(float32(centerX), float32(h)))
+					lineCol := labelCol
+					lineCol.A = 0x60
+					paint.FillShape(gtx.Ops, lineCol, clip.Stroke{Path: lp.End(), Width: 1}.Op())
+				}
+
+				// Channel label (band name + channel name), offset one line per band.
+				labelW := max(rightX-leftX, 1)
+				labelY := 2 + bi*gtx.Sp(14)
+				stack := op.Offset(image.Pt(leftX, labelY)).Push(gtx.Ops)
+				gtxLabel := gtx
+				gtxLabel.Constraints.Min.X = 0
+				gtxLabel.Constraints.Max.X = labelW
+				l := material.Body2(th, band.Name+ch.Name)
+				l.Color = labelCol
+				l.Layout(gtxLabel)
+				stack.Pop()
+			}
+		}
+	}
 
 	if sw.maxHold {
 		var path clip.Path

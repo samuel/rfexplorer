@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"log"
 	"math"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 	"github.com/samuel/rfexplorer/rfx"
+	"github.com/samuel/rfexplorer/rfxbands"
 )
 
 // defaultMargin is a margin applied in multiple places to give
@@ -86,13 +88,16 @@ type UI struct {
 	presetList           *widget.List
 	presetClicks         []gesture.Click
 	rfeConfig            rfx.CurrentConfigPacket
-	lcdEnabled      bool
-	lcdSwitch       *widget.Bool
-	expModuleActive bool
-	expModuleSwitch *widget.Bool
-	presetEditor    *presetEditor
-	addPresetBtn    widget.Clickable
-	leftBg, leftFg color.NRGBA
+	lcdEnabled           bool
+	lcdSwitch            *widget.Bool
+	expModuleActive      bool
+	expModuleSwitch      *widget.Bool
+	presetEditor         *presetEditor
+	addPresetBtn         widget.Clickable
+	bandSets             []*rfxbands.BandSet
+	uiConfig             *UIConfig
+	uiConfigPath         string
+	leftBg, leftFg       color.NRGBA
 }
 
 func NewUI(rfe *rfx.RFExplorer) *UI {
@@ -103,14 +108,41 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 		ContrastBg: color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff},
 		ContrastFg: color.NRGBA{R: 0xef, G: 0xef, B: 0xef, A: 0xff},
 	}
+
+	// Load band sets: builtins merged with any user-defined sets.
+	var customSets []*rfxbands.BandSet
+	cfgDir, err := configDir()
+	var uiConfigPath string
+	if err != nil {
+		log.Printf("Could not determine config dir: %s", err)
+	} else {
+		uiConfigPath = filepath.Join(cfgDir, "ui.json")
+		custom, err := rfxbands.LoadFile(filepath.Join(cfgDir, "bands.json"))
+		if err != nil {
+			log.Printf("Could not load custom band sets: %s", err)
+		} else {
+			customSets = custom
+		}
+	}
+	bandSets := rfxbands.MergeSets(rfxbands.Builtins, customSets)
+
+	cfg, err := loadUIConfig(uiConfigPath)
+	if err != nil {
+		log.Printf("Could not load UI config: %s", err)
+		cfg = &UIConfig{}
+	}
+
+	pe := newPresetEditor()
+	pe.SetBandSets(bandSets)
+
 	ui := &UI{
 		Theme: theme,
 
 		rfe:                  rfe,
-		lcdEnabled:      true,
-		lcdSwitch:       &widget.Bool{Value: true},
-		expModuleSwitch: &widget.Bool{},
-		presetEditor:    newPresetEditor(),
+		lcdEnabled:           true,
+		lcdSwitch:            &widget.Bool{Value: true},
+		expModuleSwitch:      &widget.Bool{},
+		presetEditor:         pe,
 		centerFrequencyInput: &widget.Editor{SingleLine: true, Submit: true},
 		frequencySpanInput:   &widget.Editor{SingleLine: true, Submit: true},
 		presetList: &widget.List{
@@ -118,14 +150,41 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 				Axis: layout.Vertical,
 			},
 		},
-		leftBg: color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff},
-		leftFg: color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff},
+		bandSets:     bandSets,
+		uiConfig:     cfg,
+		uiConfigPath: uiConfigPath,
+		leftBg:       color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff},
+		leftFg:       color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff},
 	}
 	w := NewWaterfall(112, 256, -120, 0, true, true)
 	ui.Waterfall = NewWaterfallWidget(w)
 	ui.Spectrum = NewSpectrumWidget()
 	// ui.WifiSpectrum = NewWifiSpectrumWidget(2400000, 2495000, ui.Theme)
 	return ui
+}
+
+// bandSetByName returns the BandSet with the given name, or nil if not found.
+func (ui *UI) bandSetByName(name string) *rfxbands.BandSet {
+	for _, bs := range ui.bandSets {
+		if bs.Name == name {
+			return bs
+		}
+	}
+	return nil
+}
+
+// saveUIConfig persists uiConfig to disk in the background, logging any error.
+func (ui *UI) saveUIConfig() {
+	if ui.uiConfigPath == "" {
+		return
+	}
+	cfg := ui.uiConfig
+	path := ui.uiConfigPath
+	go func() {
+		if err := cfg.Save(path); err != nil {
+			log.Printf("Failed to save UI config: %s", err)
+		}
+	}()
 }
 
 func (ui *UI) setRFEConfig(cfg rfx.CurrentConfigPacket) {
@@ -254,10 +313,18 @@ func (ui *UI) Run(w *app.Window) error {
 				if err := ui.rfe.SetAnalyzerConfig(p.MinFreqKHz, p.MaxFreqKHz, p.AmpTopDBm, p.AmpBottomDBm, 0); err != nil {
 					log.Printf("Failed to apply preset: %s", err)
 				}
+				bandSetName := pe.SelectedBandSetName()
+				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
+				ui.Spectrum.SetBandSet(ui.bandSetByName(bandSetName))
+				ui.saveUIConfig()
 			}
 			if pe.PendingSave {
 				pe.PendingSave = false
 				p := pe.ToPreset()
+				bandSetName := pe.SelectedBandSetName()
+				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
+				ui.Spectrum.SetBandSet(ui.bandSetByName(bandSetName))
+				ui.saveUIConfig()
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
@@ -276,6 +343,8 @@ func (ui *UI) Run(w *app.Window) error {
 			if pe.PendingDelete {
 				pe.PendingDelete = false
 				blank := rfx.Preset{Index: pe.Index}
+				ui.uiConfig.SetBandSetFor(pe.Index, "")
+				ui.saveUIConfig()
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
@@ -361,7 +430,8 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				break
 			}
 			if e.Kind == gesture.KindClick {
-				ui.presetEditor.OpenPreset(ui.presets[i])
+				p := ui.presets[i]
+				ui.presetEditor.OpenPreset(p, ui.uiConfig.BandSetFor(p.Index))
 			}
 		}
 	}
@@ -478,7 +548,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 							layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								if ui.addPresetBtn.Clicked(gtx) {
-									ui.presetEditor.OpenNew(firstUnusedPresetIndex(ui.presets))
+									ui.presetEditor.OpenNew(firstUnusedPresetIndex(ui.presets), "")
 								}
 								return material.Button(th, &ui.addPresetBtn, "Add Preset").Layout(gtx)
 							}),
