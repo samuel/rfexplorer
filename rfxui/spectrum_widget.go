@@ -71,9 +71,7 @@ func NewSpectrumWidget() *SpectrumWidget {
 	return sw
 }
 
-func (sw *SpectrumWidget) Reset() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
+func (sw *SpectrumWidget) resetLocked() {
 	for i := range sw.maxValues {
 		sw.maxValues[i] = sw.min
 	}
@@ -81,6 +79,21 @@ func (sw *SpectrumWidget) Reset() {
 		sw.heatMap[i] = 0
 	}
 	sw.heatMapMax = 0
+}
+
+func (sw *SpectrumWidget) Reset() {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.resetLocked()
+}
+
+// SetAmplitude updates the displayed amplitude range and resets accumulated data.
+func (sw *SpectrumWidget) SetAmplitude(bottom, top int) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.min = float64(bottom)
+	sw.max = float64(top)
+	sw.resetLocked()
 }
 
 func (sw *SpectrumWidget) Update(values []float64) {
@@ -276,6 +289,26 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
+
+	// Amplitude Y-axis labels at the top and each horizontal grid line.
+	labelColor := color.NRGBA{R: 0xaa, G: 0xaa, B: 0xaa, A: 0xff}
+	labelH := gtx.Sp(11)
+	for i := range 6 {
+		dbm := sw.max - float64(i)*(sw.max-sw.min)/5.0
+		gridY := i * (h - 1) / 5
+		labelY := gridY + 2
+		if labelY+labelH > h {
+			labelY = h - labelH - 2
+		}
+		stack := op.Offset(image.Pt(4, labelY)).Push(gtx.Ops)
+		gtxL := gtx
+		gtxL.Constraints.Min.X = 0
+		gtxL.Constraints.Max.X = 80
+		l := material.Caption(th, fmt.Sprintf("%.0f", dbm))
+		l.Color = labelColor
+		l.Layout(gtxL)
+		stack.Pop()
+	}
 
 	// Highlight rect: draw a translucent overlay for the selected channel range.
 	if sw.highlightLoKHz != sw.highlightHiKHz && sw.freqStepHz > 0 && len(sw.values) > 1 {

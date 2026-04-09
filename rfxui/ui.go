@@ -197,7 +197,10 @@ func (ui *UI) setRFEConfig(cfg rfx.CurrentConfigPacket) {
 	ui.expModuleActive = cfg.ExpModuleActive
 	ui.expModuleSwitch.Value = cfg.ExpModuleActive
 	ui.Spectrum.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
+	ui.Spectrum.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
 	ui.ChannelOverview.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
+	ui.ChannelOverview.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
+	ui.Waterfall.w.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
 	centerFreqMHZ := float64(1000*cfg.StartFreqKHZ+cfg.FreqStepHZ*(cfg.SweepSteps-1)/2) / 1e6
 	ui.centerFrequencyInput.SetText(strconv.FormatFloat(centerFreqMHZ+0.0004, 'f', 3, 64))
 	freqSpanMHZ := float64((cfg.SweepSteps-1)*cfg.FreqStepHZ) / 1e6

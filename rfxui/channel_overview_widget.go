@@ -25,13 +25,12 @@ const chanRowDp unit.Dp = 36
 // max received power. Clicking again deselects.
 type ChannelOverviewWidget struct {
 	// UI-goroutine-only fields (no mutex needed):
-	min          float64
-	max          float64
 	selectedBand int
 	selectedChan int
 	clicks       [][]gesture.Click
 
 	mu           sync.Mutex
+	min, max     float64
 	bandSet      *rfxbands.BandSet
 	startFreqKHz int
 	freqStepHz   int
@@ -81,6 +80,19 @@ func (cw *ChannelOverviewWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
 	defer cw.mu.Unlock()
 	cw.startFreqKHz = startFreqKHz
 	cw.freqStepHz = freqStepHz
+}
+
+// SetAmplitude updates the displayed amplitude range and resets per-channel max-hold data.
+func (cw *ChannelOverviewWidget) SetAmplitude(bottom, top int) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.min = float64(bottom)
+	cw.max = float64(top)
+	for bi := range cw.chanMaxPower {
+		for ci := range cw.chanMaxPower[bi] {
+			cw.chanMaxPower[bi][ci] = float64(bottom)
+		}
+	}
 }
 
 func (cw *ChannelOverviewWidget) Update(values []float64) {
@@ -157,6 +169,8 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 	startFreqKHz := cw.startFreqKHz
 	freqStepHz := cw.freqStepHz
 	values := cw.values
+	ampMin := cw.min
+	ampMax := cw.max
 	cw.mu.Unlock()
 
 	if bs == nil || len(bs.Bands) == 0 {
@@ -219,7 +233,7 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 	for bi, band := range bs.Bands {
 		channelCurrent[bi] = make([]float64, len(band.Channels))
 		for ci, ch := range band.Channels {
-			channelCurrent[bi][ci] = cw.min
+			channelCurrent[bi][ci] = ampMin
 			if freqStepHz > 0 && len(values) > 0 {
 				startHz := startFreqKHz * 1000
 				loHz := ch.CenterKHz*1000 - ch.WidthKHz*1000/2
@@ -315,7 +329,7 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 
 			// VU-meter fill (current sweep max), from bottom up.
 			cur := channelCurrent[bi][ci]
-			fillA := (cur - cw.min) / (cw.max - cw.min)
+			fillA := (cur - ampMin) / (ampMax - ampMin)
 			if fillA < 0 {
 				fillA = 0
 			} else if fillA > 1 {
@@ -335,7 +349,7 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 			// Max-hold tick line.
 			if bi < len(chanMaxPower) && ci < len(chanMaxPower[bi]) {
 				maxPow := chanMaxPower[bi][ci]
-				maxA := (maxPow - cw.min) / (cw.max - cw.min)
+				maxA := (maxPow - ampMin) / (ampMax - ampMin)
 				if maxA < 0 {
 					maxA = 0
 				} else if maxA > 1 {

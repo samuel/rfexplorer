@@ -56,6 +56,18 @@ func (w *Waterfall) Update(values []float64) {
 	w.row = (w.row + 1) % w.height
 }
 
+// SetAmplitude updates the displayed amplitude range and clears the waterfall image.
+func (w *Waterfall) SetAmplitude(bottom, top int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.min = float64(bottom)
+	w.max = float64(top)
+	for i := range w.img.Pix {
+		w.img.Pix[i] = 0
+	}
+	w.row = 0
+}
+
 func (w *Waterfall) Row() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
