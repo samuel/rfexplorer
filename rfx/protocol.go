@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -490,10 +491,9 @@ type Packet interface {
 }
 
 type RFExplorer struct {
-	port    io.ReadWriteCloser
-	closeCh chan struct{}
-	readCh  chan Packet
-	// config        atomic.Value // *CurrentConfigPacket
+	port          io.ReadWriteCloser
+	closeCh       chan struct{}
+	readCh        chan Packet
 	endOfPresetCh chan struct{}
 
 	txMu     sync.Mutex
@@ -526,7 +526,7 @@ func New(port io.ReadWriteCloser) (*RFExplorer, error) {
 	// Get the initial config
 	// TODO: this fails depending on mode
 	if err := rf.RequestConfig(); err != nil {
-		rf.Close()
+		_ = rf.Close() // returning the original error
 		return nil, err
 	}
 setupLoop:
@@ -534,23 +534,17 @@ setupLoop:
 		// TODO: timeout
 		pkt, ok := <-rf.Chan()
 		if !ok {
-			rf.Close()
-			return nil, fmt.Errorf("rfx: failed to get current config")
+			_ = rf.Close() // returning the original error
+			return nil, errors.New("rfx: failed to get current config")
 		}
-		switch pkt := pkt.(type) {
+		switch pkt.(type) {
 		case *CurrentConfigPacket:
-			// rf.config.Store(pkt)
-			_ = pkt
 			if err := rf.RequestInternalCalibrationData(); err != nil {
-				rf.Close()
+				_ = rf.Close() // returning the original error
 				return nil, err
 			}
 			// TODO: wait for calibration data
 			break setupLoop
-			// case *UnhandledPacket:
-			// 	fmt.Println(hex.Dump(pkt.Data))
-			// default:
-			// 	fmt.Printf("%+#v\n", pkt)
 		}
 	}
 	return rf, nil
@@ -566,10 +560,6 @@ func (r *RFExplorer) Close() error {
 func (r *RFExplorer) Chan() chan Packet {
 	return r.readCh
 }
-
-// func (r *RFExplorer) Config() *CurrentConfigPacket {
-// 	return r.config.Load().(*CurrentConfigPacket)
-// }
 
 // SetLCDEnabled requests RF Explorer to turn the LCD on or off.
 func (r *RFExplorer) SetLCDEnabled(enabled bool) error {
@@ -675,7 +665,7 @@ func (r *RFExplorer) SwitchModuleMain() error {
 	return r.SendCommand("CM\x00")
 }
 
-// Hold stops receiving samples. Use RequestConfig to resume receving samples.
+// Hold stops receiving samples. Use RequestConfig to resume receiving samples.
 func (r *RFExplorer) Hold() error {
 	return r.SendCommand("CH")
 }
@@ -775,7 +765,7 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 	// <Amp_Top>, <Amp_Bottom> = 4 ascii digits, decimal
 	// <RBW_KHZ> = 5 ascii digits, decimal
 	if startFreqKHZ < 0 || endFreqKHZ < 0 || startFreqKHZ > 9999999 || endFreqKHZ > 9999999 {
-		return fmt.Errorf("rfx: SetAnalyzerConfig startFreqKHZ and endFreqKHZ must be in the range [0,9999999]")
+		return errors.New("rfx: SetAnalyzerConfig startFreqKHZ and endFreqKHZ must be in the range [0,9999999]")
 	}
 	if ampTopDBm > 0 {
 		ampTopDBm = 0
@@ -789,18 +779,10 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 
 	var rbwKHZStr string
 	if rbwKHZ > 0 && rbwKHZ >= 3 && rbwKHZ <= 670 {
-		steps := (endFreqKHZ - startFreqKHZ + rbwKHZ/2) / rbwKHZ
-		if steps < 112 {
-			steps = 112
-		}
-		if steps > MaxSpectrumSteps {
-			steps = MaxSpectrumSteps
-		}
+		steps := min(max((endFreqKHZ-startFreqKHZ+rbwKHZ/2)/rbwKHZ, 112), MaxSpectrumSteps)
 		rbwKHZ = (endFreqKHZ - startFreqKHZ + steps/2) / steps
 		if rbwKHZ >= 3 && rbwKHZ < 620 {
 			rbwKHZStr = fmt.Sprintf(",%05d", rbwKHZ)
-			// } else {
-			// 	fmt.Printf("Ignored RBW %d Khz", rbwKHZ)
 		}
 	}
 
@@ -867,7 +849,7 @@ func (r *RFExplorer) CalculatorMode() CalculatorMode {
 
 func (r *RFExplorer) write(b []byte) error {
 	if n, err := r.port.Write(b); err != nil {
-		return fmt.Errorf("rfx: failed to write to port: %s", err)
+		return fmt.Errorf("rfx: failed to write to port: %w", err)
 	} else if n != len(b) {
 		return fmt.Errorf("rfx: expected to write %d bytes but wrote %d", len(b), n)
 	}
@@ -877,16 +859,6 @@ func (r *RFExplorer) write(b []byte) error {
 func (r *RFExplorer) handlePacket(pkt Packet) {
 	r.readCh <- pkt
 }
-
-// var logFile *os.File
-
-// func init() {
-// 	var err error
-// 	logFile, err = os.Create("log.bin")
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// }
 
 func (r *RFExplorer) readLoop() {
 	buf := make([]byte, 8192)
@@ -901,7 +873,6 @@ func (r *RFExplorer) readLoop() {
 			// TODO
 			log.Fatal(err)
 		}
-		// logFile.Write(buf[off : off+n])
 		select {
 		case <-r.closeCh:
 			return
@@ -1208,17 +1179,3 @@ func (r *RFExplorer) readLoop() {
 		}
 	}
 }
-
-/*
-	// Returns the frequency corresponding to the index idx
-	public float GetFrequency(int idx, int sweep_steps)
-	{
-		float ris = (float)Start_Freq;
-		if(idx>0)
-		{
-			ris = ris + idx * ((float)(End_Freq - Start_Freq)/(float)sweep_steps);
-		}
-		ris = (ris / 1000.0f);            // freq. in MHz
-		return(ris);
-	}
-*/

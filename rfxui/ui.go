@@ -49,7 +49,7 @@ func firstUnusedPresetIndex(presets []*rfx.Preset) int {
 func layoutEditorField(gtx layout.Context, th *material.Theme, ed *widget.Editor) layout.Dimensions {
 	borderColor := color.NRGBA{R: 0x99, G: 0x99, B: 0x99, A: 0xff}
 	if gtx.Focused(ed) {
-		borderColor = th.Palette.ContrastBg
+		borderColor = th.ContrastBg
 	}
 	return layout.Stack{}.Layout(gtx,
 		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
@@ -417,7 +417,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				freqSpanMHZ := float64(ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1)) / 1e6
 				startFreqKHZ := int((centerFreqMHZ - freqSpanMHZ/2) * 1000)
 				endFreqKHZ := int((centerFreqMHZ + freqSpanMHZ/2) * 1000)
-				if ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
+				if err := ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
 					log.Printf("Failed to set analyzer config: %s", err)
 				}
 			}
@@ -435,7 +435,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				startFreqKHZ := int(math.Round((centerFreqMHZ - freqSpanMHZ/2) * 1000))
 				endFreqKHZ := int(math.Round((centerFreqMHZ + freqSpanMHZ/2) * 1000))
 				fmt.Println(startFreqKHZ, endFreqKHZ, centerFreqMHZ)
-				if ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
+				if err := ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
 					log.Printf("Failed to set analyzer config: %s", err)
 				}
 			}

@@ -5,8 +5,10 @@ package main
 
 import (
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"os"
 	"os/signal"
@@ -23,7 +25,6 @@ type channel struct {
 	name         string
 	centerFreqHz int
 	widthHZ      int
-	note         string
 }
 
 var wifi24Channels = []channel{
@@ -164,9 +165,20 @@ var vtx58Channels = []channel{
 // 	{name: "26", centerFreqHz: 2480000000, widthHZ: 2000000, note:"No Conflict Newer non-PRO XBee only"},
 // }
 
+// defaultDevice returns the serial device from RFX_DEVICE, falling back to
+// the usual macOS name of the CP210x USB bridge.
+func defaultDevice() string {
+	if dev := os.Getenv("RFX_DEVICE"); dev != "" {
+		return dev
+	}
+	return "/dev/tty.usbserial-0001"
+}
+
 func main() {
-	// rfe, err := rfx.New("/dev/tty.SLAB_USBtoUART")
-	port, err := rfx.OpenSerial("/dev/tty.usbserial-0001")
+	flagDevice := flag.String("dev", defaultDevice(), "Path to serial device (default from RFX_DEVICE)")
+	flag.Parse()
+
+	port, err := rfx.OpenSerial(*flagDevice)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -174,78 +186,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rfe.Close()
+	defer rfe.Close() //nolint:errcheck // exiting, nothing to do with the error
 
-	// if err := rfe.SwitchModuleExp(); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := rfe.SetAnalyzerConfig(2475650, 2501300, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 2.4 GHz Zigbee
-	// if err := rfe.SetAnalyzerConfig(2404000, 2481000, 0, -120, 400); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 2.4 GHz Wi-Fi
-	// if err := rfe.SetAnalyzerConfig(2401000, 2495000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := rfe.SetSteps(512); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// Interesting signal
-	// if err := rfe.SetAnalyzerConfig(2420000, 2450000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// ISM Band (Region 2)
-	// if err := rfe.SetAnalyzerConfig(902000, 928000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 6 meter amateur radio
-	// if err := rfe.SetAnalyzerConfig(50000, 54000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 2 meter amateur radio
-	// if err := rfe.SetAnalyzerConfig(144000, 148000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 1.25 meter amateur radio
-	// if err := rfe.SetAnalyzerConfig(222000, 225000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 70 centimeters
-	// if err := rfe.SetAnalyzerConfig(420000, 450000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// if err := rfe.SwitchModuleMain(); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// 5 GHz Wi-Fi
-	// if err := rfe.SetAnalyzerConfig(5170000, 5835000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := rfe.SetAnalyzerConfig(5500000, 5700000, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// if err := rfe.SetAnalyzerConfig(433900, 434100, 0, -120, 0); err != nil {
-	// 	log.Fatal(err)
-	// }
 	if err := rfe.SetScreenDumpEnabled(false); err != nil {
 		log.Fatal(err)
 	}
 
 	lcdEnabled := false
-	// if err := rfe.SetLCDEnabled(lcdEnabled); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := rfe.SetCalculatorMode(rfx.CalculatorModeAvg); err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := rfe.SetScreenDumpEnabled(false); err != nil {
-	// 	log.Fatal(err)
-	// }
 	if err := rfe.RequestConfig(); err != nil {
 		log.Fatal(err)
 	}
@@ -259,7 +206,6 @@ func main() {
 	defer termbox.Close()
 
 	termbox.HideCursor()
-	// termbox.SetInputMode(termbox.InputEsc)
 
 	wifi24 := uint32(0)
 	vtx85ghz := uint32(0)
@@ -269,7 +215,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer logFile.Close()
+	defer logFile.Close() //nolint:errcheck // best-effort debug log
+	logger := slog.New(slog.NewTextHandler(logFile, nil))
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -349,9 +296,8 @@ func main() {
 		AmpTopDBM:    0,
 		AmpBottomDBM: -120,
 	}
-	maxAmp := -999.0
-	maxAmpFreq := 0
-	maxAmpStep := 0
+	var maxAmp float64
+	var maxAmpFreq, maxAmpStep int
 	var maxSamples []float64
 	const numAvg = 0 //2
 	var sumSamples []float64
@@ -359,11 +305,9 @@ func main() {
 	for {
 		select {
 		case pkt := <-rfe.Chan():
-			// fmt.Fprintf(logFile, "%#+v\n", pkt)
 			switch pkt := pkt.(type) {
 			case *rfx.CurrentConfigPacket:
-				fmt.Fprintf(logFile, "%#+v\n", pkt)
-				// fmt.Printf("%#+v\n", pkt)
+				logger.Info("config", "packet", fmt.Sprintf("%+v", *pkt))
 				config = pkt
 			case *rfx.SweepDataPacket:
 				if atomic.LoadUint32(&dumpingScreen) != 0 {
@@ -585,9 +529,9 @@ func main() {
 			// case *rfx.SerialNumberPacket:
 			// case *rfx.CurrentSetupPacket:
 			case *rfx.UnhandledPacket:
-				fmt.Fprintf(logFile, "%s\n", hex.Dump(pkt.Data))
+				logger.Info("unhandled packet", "data", hex.EncodeToString(pkt.Data))
 			default:
-				fmt.Fprintf(logFile, "%#+v\n", pkt)
+				logger.Info("packet", "type", pkt.Type(), "packet", fmt.Sprintf("%+v", pkt))
 			}
 		case sig := <-ch:
 			fmt.Printf("Quitting due to signal %s", sig)
