@@ -1,6 +1,6 @@
-// Package rfxbands defines frequency band and channel data structures for RF
+// Package bands defines frequency band and channel data structures for RF
 // spectrum analysis, along with built-in band sets for common RF standards.
-package rfxbands
+package bands
 
 // Channel is a single RF channel defined by its center frequency and bandwidth.
 type Channel struct {

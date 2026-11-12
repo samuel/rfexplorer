@@ -11,8 +11,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
-	"github.com/samuel/rfexplorer/rfx"
-	"github.com/samuel/rfexplorer/rfxbands"
+	"samuelks.com/rfx"
+	"samuelks.com/rfx/bands"
 )
 
 var (
@@ -140,7 +140,7 @@ type presetEditor struct {
 	mainboardSwitch     *widget.Bool
 	calcModeDropdown    *enumDropdown
 	markerModeDropdown  *enumDropdown
-	bandSets            []*rfxbands.BandSet
+	bandSets            []*bands.BandSet
 	bandSetDropdown     *enumDropdown
 
 	applyBtn  widget.Clickable
@@ -175,7 +175,7 @@ func newPresetEditor() *presetEditor {
 
 // SetBandSets updates the available band sets shown in the channel overlay
 // dropdown. Call this once after loading band sets at startup.
-func (e *presetEditor) SetBandSets(sets []*rfxbands.BandSet) {
+func (e *presetEditor) SetBandSets(sets []*bands.BandSet) {
 	labels := make([]string, 1+len(sets))
 	labels[0] = "(none)"
 	for i, bs := range sets {

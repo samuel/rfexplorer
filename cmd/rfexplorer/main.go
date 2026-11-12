@@ -18,7 +18,7 @@ import (
 	"syscall"
 
 	termbox "github.com/nsf/termbox-go"
-	"github.com/samuel/rfexplorer/rfx"
+	"samuelks.com/rfx"
 )
 
 type channel struct {

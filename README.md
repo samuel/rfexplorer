@@ -3,19 +3,19 @@ RF Explorer Handheld Spectrum Analyzer Library and Tools
 
 Go library and tools for RF Explorer handheld spectrum analyzers over serial.
 
-Documentation: https://pkg.go.dev/github.com/samuel/rfexplorer/rfx
+Documentation: https://pkg.go.dev/samuelks.com/rfx
 
-- `rfx` — protocol library
-- `rfxbands` — channel plans (WiFi, FPV video, MURS, GMRS) and custom band sets
-- `rfxui` — desktop GUI
-- `.` — terminal spectrum display
+- `samuelks.com/rfx` — protocol library (repository root)
+- `bands` — channel plans (WiFi, FPV video, MURS, GMRS) and custom band sets
+- `cmd/rfxui` — desktop GUI
+- `cmd/rfexplorer` — terminal spectrum display
 
 Usage
 -----
 
 ```bash
-go build -o rfexplorer . && ./rfexplorer -dev /dev/ttyUSB0
-go build -o rfxui/rfxui ./rfxui && ./rfxui/rfxui -dev /dev/ttyUSB0
+go build ./cmd/rfexplorer && ./rfexplorer -dev /dev/ttyUSB0
+go build ./cmd/rfxui && ./rfxui -dev /dev/ttyUSB0
 ```
 
 The serial device is taken from `-dev`, then the `RFX_DEVICE` environment

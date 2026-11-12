@@ -1,4 +1,4 @@
-package rfxbands
+package bands
 
 import (
 	"encoding/json"

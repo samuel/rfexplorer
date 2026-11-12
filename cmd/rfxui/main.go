@@ -8,7 +8,7 @@ import (
 	"gioui.org/app"
 	"gioui.org/unit"
 
-	"github.com/samuel/rfexplorer/rfx"
+	"samuelks.com/rfx"
 )
 
 // defaultDevice returns the serial device from RFX_DEVICE, falling back to

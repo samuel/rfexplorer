@@ -13,7 +13,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
-	"github.com/samuel/rfexplorer/rfxbands"
+	"samuelks.com/rfx/bands"
 )
 
 const chanRowDp unit.Dp = 36
@@ -31,7 +31,7 @@ type ChannelOverviewWidget struct {
 
 	mu           sync.Mutex
 	min, max     float64
-	bandSet      *rfxbands.BandSet
+	bandSet      *bands.BandSet
 	startFreqKHz int
 	freqStepHz   int
 	values       []float64
@@ -49,7 +49,7 @@ func NewChannelOverviewWidget() *ChannelOverviewWidget {
 	}
 }
 
-func (cw *ChannelOverviewWidget) SetBandSet(bs *rfxbands.BandSet) {
+func (cw *ChannelOverviewWidget) SetBandSet(bs *bands.BandSet) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	cw.bandSet = bs

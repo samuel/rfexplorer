@@ -14,7 +14,7 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/widget/material"
-	"github.com/samuel/rfexplorer/rfxbands"
+	"samuelks.com/rfx/bands"
 )
 
 const heatMapHeight = 256
@@ -55,7 +55,7 @@ type SpectrumWidget struct {
 	startFreqKHz   int
 	freqStepHz     int
 	hoverX         int
-	bandSet        *rfxbands.BandSet
+	bandSet        *bands.BandSet
 	highlightLoKHz int
 	highlightHiKHz int
 }
@@ -138,7 +138,7 @@ func (sw *SpectrumWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
 }
 
 // SetBandSet sets the active band set (used for highlight range mapping). Pass nil to clear.
-func (sw *SpectrumWidget) SetBandSet(bs *rfxbands.BandSet) {
+func (sw *SpectrumWidget) SetBandSet(bs *bands.BandSet) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	sw.bandSet = bs

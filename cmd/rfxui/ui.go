@@ -23,8 +23,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
-	"github.com/samuel/rfexplorer/rfx"
-	"github.com/samuel/rfexplorer/rfxbands"
+	"samuelks.com/rfx"
+	"samuelks.com/rfx/bands"
 )
 
 // defaultMargin is a margin applied in multiple places to give
@@ -95,7 +95,7 @@ type UI struct {
 	expModuleSwitch      *widget.Bool
 	presetEditor         *presetEditor
 	addPresetBtn         widget.Clickable
-	bandSets             []*rfxbands.BandSet
+	bandSets             []*bands.BandSet
 	uiConfig             *UIConfig
 	uiConfigPath         string
 	leftBg, leftFg       color.NRGBA
@@ -111,21 +111,21 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 	}
 
 	// Load band sets: builtins merged with any user-defined sets.
-	var customSets []*rfxbands.BandSet
+	var customSets []*bands.BandSet
 	cfgDir, err := configDir()
 	var uiConfigPath string
 	if err != nil {
 		log.Printf("Could not determine config dir: %s", err)
 	} else {
 		uiConfigPath = filepath.Join(cfgDir, "ui.json")
-		custom, err := rfxbands.LoadFile(filepath.Join(cfgDir, "bands.json"))
+		custom, err := bands.LoadFile(filepath.Join(cfgDir, "bands.json"))
 		if err != nil {
 			log.Printf("Could not load custom band sets: %s", err)
 		} else {
 			customSets = custom
 		}
 	}
-	bandSets := rfxbands.MergeSets(rfxbands.Builtins, customSets)
+	bandSets := bands.MergeSets(bands.Builtins, customSets)
 
 	cfg, err := loadUIConfig(uiConfigPath)
 	if err != nil {
@@ -166,7 +166,7 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 }
 
 // bandSetByName returns the BandSet with the given name, or nil if not found.
-func (ui *UI) bandSetByName(name string) *rfxbands.BandSet {
+func (ui *UI) bandSetByName(name string) *bands.BandSet {
 	for _, bs := range ui.bandSets {
 		if bs.Name == name {
 			return bs
