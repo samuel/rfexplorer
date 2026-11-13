@@ -285,10 +285,12 @@ func _() {
 	_ = x[KindRawData-2048]
 	_ = x[KindUnhandled-4096]
 	_ = x[KindProtocolError-8192]
-	_ = x[KindAll-16383]
+	_ = x[KindInputStage-16384]
+	_ = x[KindTracking-32768]
+	_ = x[KindAll-65535]
 }
 
-const _Kind_name = "SweepConfigDeviceInfoSerialNumberCalculatorPresetPresetsEndScreenCalibrationCalibrationAvailabilitySnifferConfigRawDataUnhandledProtocolErrorAll"
+const _Kind_name = "SweepConfigDeviceInfoSerialNumberCalculatorPresetPresetsEndScreenCalibrationCalibrationAvailabilitySnifferConfigRawDataUnhandledProtocolErrorInputStageTrackingAll"
 
 var _Kind_map = map[Kind]string{
 	1:     _Kind_name[0:5],
@@ -305,7 +307,9 @@ var _Kind_map = map[Kind]string{
 	2048:  _Kind_name[112:119],
 	4096:  _Kind_name[119:128],
 	8192:  _Kind_name[128:141],
-	16383: _Kind_name[141:144],
+	16384: _Kind_name[141:151],
+	32768: _Kind_name[151:159],
+	65535: _Kind_name[159:162],
 }
 
 func (i Kind) String() string {

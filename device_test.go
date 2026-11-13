@@ -325,7 +325,7 @@ func TestSubscribe(t *testing.T) {
 	for _, msg := range collect(t, all, end) {
 		kinds = append(kinds, msg.Kind())
 	}
-	if want := []Kind{KindSweep, KindCalculator, KindUnhandled, KindSweep, KindSerialNumber}; !reflect.DeepEqual(kinds, want) {
+	if want := []Kind{KindSweep, KindCalculator, KindInputStage, KindSweep, KindSerialNumber}; !reflect.DeepEqual(kinds, want) {
 		t.Errorf("unfiltered: got %v, want %v", kinds, want)
 	}
 

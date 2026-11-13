@@ -15,7 +15,10 @@ import (
 // mainboard:bool markermode:byte
 const presetFrameLen = 33
 
-var errFrameLength = errors.New("frame length does not match its header")
+var (
+	errFrameLength = errors.New("frame length does not match its header")
+	errEarlyEnd    = errors.New("transmission ended early")
+)
 
 // decode converts a frame, as produced by framer, into a message. Frames
 // that are not recognized are returned as Unhandled. An error is returned for
@@ -41,6 +44,9 @@ func decode(b []byte) (Message, error) {
 }
 
 func decodeBinary(b []byte) (Message, error) {
+	if bytes.HasSuffix(b, eeot) {
+		return nil, errEarlyEnd
+	}
 	n, isBinary, ok := binaryFrameLen(b)
 	if !isBinary {
 		return nil, nil
@@ -56,7 +62,6 @@ func decodeBinary(b []byte) (Message, error) {
 	case 'D':
 		return &ScreenImage{Data: bytes.Clone(b[2:])}, nil
 	case 'R':
-		// Raw data (used for sniffer)
 		return &RawData{Data: bytes.Clone(b[4:])}, nil
 	case 'q':
 		return &Calibration{Data: bytes.Clone(b[3:])}, nil
@@ -128,8 +133,9 @@ func decodeText(b []byte) (Message, error) {
 			Calculator:      CalculatorMode(f.int(12)),
 		}
 		return pkt, f.err
-	case strings.HasPrefix(s, "#C2-M:"):
+	case strings.HasPrefix(s, "#C2-M:"), strings.HasPrefix(s, "#C3-M:"):
 		// #C2-M:<Main_Model>,<Expansion_Model>,<Firmware_Version>
+		// Signal generators send the same as #C3-M.
 		f := newFields(s[6:])
 		pkt := &DeviceInfo{
 			Main:      f.model(0),
@@ -166,6 +172,13 @@ func decodeText(b []byte) (Message, error) {
 		return &SerialNumber{Serial: s[3:]}, nil
 	case strings.HasPrefix(s, "#PCK"):
 		return &PresetsEnd{}, nil
+	case strings.HasPrefix(s, "#QA:"):
+		// #QA:<input_stage>
+		f := newFields(s[4:])
+		pkt := &InputStageChange{Stage: InputStage(f.int(0))}
+		return pkt, f.err
+	case s == "#K0", s == "#K1":
+		return &TrackingChange{Enabled: s == "#K1"}, nil
 	}
 	return nil, nil
 }

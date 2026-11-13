@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RF Explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <section class="display">
+    <div class="status"><span id="device">Connecting…</span><span id="status"></span></div>
+    <canvas id="spectrum" height="320"></canvas>
+    <div class="axis"><span id="f-start"></span><span id="f-center"></span><span id="f-stop"></span></div>
+    <canvas id="waterfall" height="256"></canvas>
+  </section>
+  <aside>
+    <form id="range">
+      <label>Start (MHz) <input id="start" inputmode="decimal" required></label>
+      <label>Stop (MHz) <input id="stop" inputmode="decimal" required></label>
+      <button type="submit">Set range</button>
+    </form>
+    <label>Calculator
+      <select id="calculator">
+        <option>Normal</option><option>Max</option><option>Average</option>
+        <option>Overwrite</option><option>MaxHold</option><option>MaxHistorical</option>
+      </select>
+    </label>
+    <div class="buttons">
+      <button id="hold" type="button">Hold</button>
+      <button id="resume" type="button">Resume</button>
+      <button id="reset" type="button">Reset max hold</button>
+    </div>
+    <dl id="config"></dl>
+    <h2>Presets</h2>
+    <ul id="presets"><li>Loading…</li></ul>
+  </aside>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

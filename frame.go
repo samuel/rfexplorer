@@ -11,6 +11,10 @@ const screenDataLen = 128 * 64 / 8
 
 var crlf = []byte{'\r', '\n'}
 
+// eeot is the Early End Of Transmission marker that firmware after 1.27 sends
+// in place of the rest of a sweep it abandons.
+var eeot = []byte{0xff, 0xfe, 0xff, 0xfe, 0x00}
+
 // framer splits the byte stream from the device into frames. Every frame on
 // the wire is terminated by CRLF. Binary frames carry their own length and are
 // delimited by it, since their payload may contain CRLF. Text frames and
@@ -62,6 +66,15 @@ func nextFrame(b []byte) (frame []byte, consumed int) {
 		if !binary {
 			return nextLine(b)
 		}
+		if isSweepFrame(b[1]) {
+			// An abandoned sweep ends at the marker, which is kept in the
+			// frame so decode can report it.
+			limit := min(len(b), n+len(crlf))
+			if i := bytes.Index(b[2:limit], eeot); i >= 0 {
+				end := 2 + i + len(eeot)
+				return b[:end], end
+			}
+		}
 		if len(b) < n+len(crlf) {
 			return nil, 0
 		}
@@ -74,6 +87,10 @@ func nextFrame(b []byte) (frame []byte, consumed int) {
 		return nextLine(b)
 	}
 	return nextJunk(b)
+}
+
+func isSweepFrame(c byte) bool {
+	return c == 'S' || c == 's' || c == 'z'
 }
 
 // binaryFrameLen returns the length of the length-delimited frame at the

@@ -1,0 +1,99 @@
+:root {
+  --bg: #f4f4f5;
+  --panel: #ffffff;
+  --text: #18181b;
+  --muted: #71717a;
+  --border: #d4d4d8;
+  --accent: #3f51b5;
+  --error: #c01010;
+  --plot-bg: #000000;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b;
+    --panel: #27272a;
+    --text: #f4f4f5;
+    --muted: #a1a1aa;
+    --border: #3f3f46;
+    --accent: #8c9eff;
+    --error: #ff6b6b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 16px;
+  padding: 16px;
+  min-height: 100vh;
+}
+
+@media (max-width: 720px) {
+  main { grid-template-columns: minmax(0, 1fr); }
+}
+
+.display { display: flex; flex-direction: column; min-width: 0; }
+
+canvas {
+  display: block;
+  width: 100%;
+  background: var(--plot-bg);
+  image-rendering: pixelated;
+}
+
+.status, .axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#status.error { color: var(--error); }
+
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+form { display: flex; flex-direction: column; gap: 8px; }
+label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); }
+
+input, select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+button { cursor: pointer; }
+button[type="submit"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+
+dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+h2 { font-size: 14px; margin: 4px 0 0; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { padding: 2px 0; }
+li button { width: 100%; text-align: left; }

@@ -119,7 +119,7 @@ func TestSweepConfig(t *testing.T) {
 func TestKinds(t *testing.T) {
 	msgs := []Message{
 		&Sweep{}, &SweepConfig{}, &DeviceInfo{}, &SerialNumber{}, &CalculatorChange{}, &Preset{}, &PresetsEnd{},
-		&ScreenImage{}, &Calibration{}, &CalibrationAvailability{}, &SnifferConfig{}, &RawData{}, &Unhandled{}, &ProtocolError{},
+		&ScreenImage{}, &Calibration{}, &CalibrationAvailability{}, &SnifferConfig{}, &RawData{}, &Unhandled{}, &ProtocolError{}, &InputStageChange{}, &TrackingChange{},
 	}
 	var all Kind
 	for _, m := range msgs {

@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	gioui.org v0.10.3
+	github.com/coder/websocket v1.8.15
 	github.com/gdamore/tcell/v3 v3.6.0
 	go.bug.st/serial v1.8.0
 )

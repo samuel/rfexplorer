@@ -53,7 +53,12 @@ func TestDecode(t *testing.T) {
 		{"serial number empty", []byte("#Sn"), &SerialNumber{}},
 		{"end of presets", []byte("#PCK"), &PresetsEnd{}},
 
-		{"unknown text", []byte("#QA:0"), &Unhandled{Data: []byte("#QA:0")}},
+		{"unknown text", []byte("#BAT::23,:08,0"), &Unhandled{Data: []byte("#BAT::23,:08,0")}},
+		{"input stage", []byte("#QA:2"), &InputStageChange{Stage: InputStageLNA25dB}},
+		{"tracking on", []byte("#K1"), &TrackingChange{Enabled: true}},
+		{"tracking off", []byte("#K0"), &TrackingChange{Enabled: false}},
+		{"generator setup", []byte("#C3-M:060,255,01.15"), &DeviceInfo{Main: ModelRFGen, Expansion: ModelNone, Firmware: "1.15"}},
+		{"sniffer capture", cat("$R", 2, 0, 0xa5, 0x0f), &RawData{Data: []byte{0xa5, 0x0f}}},
 		{"unknown binary", []byte("$X123"), &Unhandled{Data: []byte("$X123")}},
 		{"banner", []byte("RF Explorer 01.34"), &Unhandled{Data: []byte("RF Explorer 01.34")}},
 		{"bare marker", []byte("#"), &Unhandled{Data: []byte("#")}},
@@ -90,6 +95,8 @@ func TestDecodeErrors(t *testing.T) {
 		{"setup not a number", []byte("#C2-M:x")},
 		{"sniffer config not a number", []byte("#C4-F:0440000,1,006,zz")},
 		{"calibration availability short", []byte("#CAL:1")},
+		{"sweep ended early", cat("$S", 112, "AB", 0xff, 0xfe, 0xff, 0xfe, 0x00)},
+		{"input stage not a number", []byte("#QA:x")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pkt, err := decode(c.frame)

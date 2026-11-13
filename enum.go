@@ -1,5 +1,10 @@
 package rfx
 
+import (
+	"fmt"
+	"strings"
+)
+
 //go:generate go run golang.org/x/tools/cmd/stringer@v0.52.0 -linecomment -type=Model,Mode,CalculatorMode,WifiMode,MarkerMode,Modulation,DSP,InputStage,Module,Kind -trimprefix=Kind -output=enum_string.go
 
 // MaxSweepPoints is the largest number of points in a sweep.
@@ -29,6 +34,12 @@ const (
 	ModelNone           Model = 255 // None
 	ModelInvalid        Model = -1  // Invalid
 )
+
+// IsGenerator reports whether m is a signal generator, which this package
+// does not support.
+func (m Model) IsGenerator() bool {
+	return m == ModelRFGen || m == ModelRFGenExpansion
+}
 
 // IsPlus reports whether m is a Plus series board.
 func (m Model) IsPlus() bool {
@@ -73,6 +84,26 @@ func (m CalculatorMode) valid() bool {
 	return m >= CalculatorNormal && m <= CalculatorMaxHistorical
 }
 
+// MarshalText implements encoding.TextMarshaler using the mode's name.
+func (m CalculatorMode) MarshalText() ([]byte, error) {
+	if !m.valid() {
+		return nil, fmt.Errorf("rfx: invalid calculator mode %d", int(m))
+	}
+	return []byte(m.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. Names are case
+// insensitive.
+func (m *CalculatorMode) UnmarshalText(b []byte) error {
+	for v := CalculatorNormal; v <= CalculatorMaxHistorical; v++ {
+		if strings.EqualFold(v.String(), string(b)) {
+			*m = v
+			return nil
+		}
+	}
+	return fmt.Errorf("rfx: unknown calculator mode %q", b)
+}
+
 // WifiMode selects the WiFi analyzer band.
 type WifiMode byte
 
@@ -90,6 +121,26 @@ const (
 	MarkerNone   MarkerMode = 1 // None
 	MarkerManual MarkerMode = 2 // Manual
 )
+
+// MarshalText implements encoding.TextMarshaler using the mode's name.
+func (m MarkerMode) MarshalText() ([]byte, error) {
+	if m > MarkerManual {
+		return nil, fmt.Errorf("rfx: invalid marker mode %d", m)
+	}
+	return []byte(m.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler. Names are case
+// insensitive.
+func (m *MarkerMode) UnmarshalText(b []byte) error {
+	for v := MarkerPeak; v <= MarkerManual; v++ {
+		if strings.EqualFold(v.String(), string(b)) {
+			*m = v
+			return nil
+		}
+	}
+	return fmt.Errorf("rfx: unknown marker mode %q", b)
+}
 
 // Modulation is the sniffer demodulation.
 type Modulation int

@@ -161,6 +161,10 @@ func TestFramerNoise(t *testing.T) {
 		{"truncated sweep", "$S\x70ABC\r\n#QA:0\r\n" + strings.Repeat("\x80", 120) + "\r\n#Sn1\r\n",
 			[]string{"$S\x70ABC", "#QA:0", strings.Repeat("\x80", 120), "#Sn1"}},
 		{"partial frame at start", "\xa9\xb0\xad\r\n$S\x02AB\r\n", []string{"\xa9\xb0\xad", "$S\x02AB"}},
+		{"early end of sweep", "$S\x70AB\xff\xfe\xff\xfe\x00#QA:0\r\n", []string{"$S\x70AB\xff\xfe\xff\xfe\x00", "#QA:0"}},
+		{"early end of sweep and terminator", "$z\x01\x00\xff\xfe\xff\xfe\x00\r\n$S\x02AB\r\n", []string{"$z\x01\x00\xff\xfe\xff\xfe\x00", "$S\x02AB"}},
+		{"early end marker in a screen", "$D" + strings.Repeat("\xff\xfe\xff\xfe\x00", 205)[:1024] + "\r\n#QA:0\r\n",
+			[]string{"$D" + strings.Repeat("\xff\xfe\xff\xfe\x00", 205)[:1024], "#QA:0"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var f framer
@@ -208,14 +212,14 @@ func TestCaptures(t *testing.T) {
 	}{
 		{"6g-wsub3g-fw1.34-startup.bin", map[Kind]int{
 			KindCalibrationAvailability: 1, KindCalibration: 1, KindConfig: 1, KindDeviceInfo: 1,
-			KindPresetsEnd: 1, KindPreset: 12, KindSerialNumber: 2, KindSweep: 13, KindUnhandled: 4,
+			KindPresetsEnd: 1, KindPreset: 12, KindSerialNumber: 2, KindSweep: 13, KindUnhandled: 3, KindInputStage: 1,
 		}},
 		{"6g-wsub3g-fw1.34-screen.bin", map[Kind]int{
 			KindScreen: 2, KindSweep: 3, KindUnhandled: 1,
 		}},
 		{"6g-wsub3g-fw1.34-config.bin", map[Kind]int{
 			KindCalibrationAvailability: 3, KindCalculator: 2, KindConfig: 3, KindDeviceInfo: 3,
-			KindSerialNumber: 3, KindSweep: 27, KindUnhandled: 10,
+			KindSerialNumber: 3, KindSweep: 27, KindUnhandled: 7, KindInputStage: 3,
 		}},
 	} {
 		t.Run(c.file, func(t *testing.T) {

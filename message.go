@@ -26,6 +26,8 @@ const (
 	KindRawData
 	KindUnhandled
 	KindProtocolError
+	KindInputStage
+	KindTracking
 
 	// KindAll selects every message.
 	KindAll Kind = 1<<iota - 1
@@ -167,24 +169,25 @@ type CalculatorChange struct {
 	Mode CalculatorMode
 }
 
-// Preset is a stored analyzer configuration.
+// Preset is a stored analyzer configuration. Its JSON form uses frequency
+// strings such as "433.92MHz" and mode names such as "MaxHold".
 type Preset struct {
 	// Index is the slot of the preset starting at 0, shown as 1 on the device.
-	Index int
+	Index int `json:"index"`
 	// Name is up to 12 printable 7-bit ASCII characters.
-	Name  string
-	Start Frequency
-	Stop  Frequency
+	Name  string    `json:"name"`
+	Start Frequency `json:"start"`
+	Stop  Frequency `json:"stop"`
 	// AmpTop range is [-110, +35] dBm and at least 10 above AmpBottom.
-	AmpTop int
+	AmpTop int `json:"amp_top"`
 	// AmpBottom range is [-120, +25] dBm.
-	AmpBottom  int
-	Calculator CalculatorMode
+	AmpBottom  int            `json:"amp_bottom"`
+	Calculator CalculatorMode `json:"calculator"`
 	// Iterations range is [1, 16].
-	Iterations int
+	Iterations int `json:"iterations"`
 	// Mainboard selects the main board rather than the expansion board.
-	Mainboard bool
-	Marker    MarkerMode
+	Mainboard bool       `json:"mainboard"`
+	Marker    MarkerMode `json:"marker"`
 }
 
 // PresetsEnd marks the end of a preset listing and acknowledges a preset
@@ -215,9 +218,56 @@ type SnifferConfig struct {
 	ThresholdDBm float64
 }
 
-// RawData is a capture of raw bytes from the sniffer.
+// RawData is a sniffer capture: the demodulated signal sampled at the rate
+// set by SnifferConfig.Delay, one bit per sample. For OOK a set bit means the
+// signal was above the threshold; for PSK it is the demodulated phase.
 type RawData struct {
+	// Time is when the capture was received.
+	Time time.Time
 	Data []byte
+}
+
+// Len returns the number of samples in the capture.
+func (r *RawData) Len() int {
+	return len(r.Data) * 8
+}
+
+// Bit returns sample i. Samples are stored most significant bit first. Bit
+// order has not been verified against hardware.
+func (r *RawData) Bit(i int) bool {
+	return r.Data[i/8]&(0x80>>(i%8)) != 0
+}
+
+// Pulse is a run of equal samples in a capture.
+type Pulse struct {
+	High    bool
+	Samples int
+}
+
+// Pulses returns the capture as runs of equal samples, the usual starting
+// point for decoding OOK remotes and sensors.
+func (r *RawData) Pulses() []Pulse {
+	var pulses []Pulse
+	for i := range r.Len() {
+		b := r.Bit(i)
+		if n := len(pulses); n > 0 && pulses[n-1].High == b {
+			pulses[n-1].Samples++
+			continue
+		}
+		pulses = append(pulses, Pulse{High: b, Samples: 1})
+	}
+	return pulses
+}
+
+// InputStageChange reports the selected input stage ("#QA").
+type InputStageChange struct {
+	Stage InputStage
+}
+
+// TrackingChange reports that the device entered ("#K1") or left ("#K0")
+// tracking mode.
+type TrackingChange struct {
+	Enabled bool
 }
 
 // Unhandled is a frame the library doesn't interpret, or line noise.
@@ -288,6 +338,8 @@ func (*SnifferConfig) Kind() Kind           { return KindSnifferConfig }
 func (*RawData) Kind() Kind                 { return KindRawData }
 func (*Unhandled) Kind() Kind               { return KindUnhandled }
 func (*ProtocolError) Kind() Kind           { return KindProtocolError }
+func (*InputStageChange) Kind() Kind        { return KindInputStage }
+func (*TrackingChange) Kind() Kind          { return KindTracking }
 
 func (*Sweep) message()                   {}
 func (*SweepConfig) message()             {}
@@ -303,3 +355,5 @@ func (*SnifferConfig) message()           {}
 func (*RawData) message()                 {}
 func (*Unhandled) message()               {}
 func (*ProtocolError) message()           {}
+func (*InputStageChange) message()        {}
+func (*TrackingChange) message()          {}

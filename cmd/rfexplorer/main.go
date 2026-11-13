@@ -10,6 +10,8 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,12 +19,14 @@ import (
 	"time"
 
 	"samuelks.com/rfx"
+	"samuelks.com/rfx/internal/cli"
 	"samuelks.com/rfx/internal/tui"
+	"samuelks.com/rfx/internal/web"
 )
 
 const (
-	// connectTimeout bounds the wait for the device to answer on startup.
-	connectTimeout = 5 * time.Second
+	// connectTimeout bounds finding and connecting to the device.
+	connectTimeout = 10 * time.Second
 	// commandTimeout bounds a one-shot command such as a screenshot.
 	commandTimeout = 10 * time.Second
 )
@@ -33,43 +37,17 @@ Commands:
   tui         live spectrum display (default)
   info        print the device model, firmware, serial number and configuration
   screenshot  save an image of the device screen as PNG
+  sniff       capture OOK/PSK signals in sniffer mode
+  presets     list, export, import, set or delete the device's presets
+  serve       serve a spectrum display to web browsers
 
-Run "rfexplorer <command> -h" for the flags of a command.
+Every command takes -dev, -baud, -record and -replay. Run
+"rfexplorer <command> -h" for the flags of a command.
 `
-
-// defaultDevice returns the serial device from RFX_DEVICE, falling back to
-// the usual macOS name of the CP210x USB bridge.
-func defaultDevice() string {
-	if dev := os.Getenv("RFX_DEVICE"); dev != "" {
-		return dev
-	}
-	return "/dev/tty.usbserial-0001"
-}
-
-// connection holds the flags shared by all commands.
-type connection struct {
-	dev  string
-	baud int
-}
-
-func (c *connection) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.dev, "dev", defaultDevice(), "path to serial device (default from RFX_DEVICE)")
-	fs.IntVar(&c.baud, "baud", int(rfx.DefaultBaudRate), "serial baud rate")
-}
-
-func (c *connection) open(ctx context.Context) (*rfx.Device, error) {
-	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
-	defer cancel()
-	dev, err := rfx.Open(ctx, c.dev, rfx.WithBaudRate(rfx.BaudRate(c.baud)))
-	if err != nil {
-		return nil, fmt.Errorf("connecting to %s: %w", c.dev, err)
-	}
-	return dev, nil
-}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:])
+	err := run(ctx, os.Args[1:], os.Stdout)
 	stop()
 	if errors.Is(err, flag.ErrHelp) {
 		return
@@ -80,14 +58,20 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string) error {
-	cmd := "tui"
-	if len(args) > 0 && (args[0] == "" || args[0][0] != '-') {
-		cmd, args = args[0], args[1:]
+// splitCommand returns the leading non-flag argument, or def if there is
+// none.
+func splitCommand(args []string, def string) (string, []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
 	}
+	return def, args
+}
+
+func run(ctx context.Context, args []string, stdout io.Writer) error {
+	cmd, args := splitCommand(args, "tui")
 	fs := flag.NewFlagSet("rfexplorer "+cmd, flag.ContinueOnError)
-	var conn connection
-	conn.register(fs)
+	var conn cli.Connection
+	conn.Register(fs)
 	switch cmd {
 	case "tui":
 		logPath := fs.String("log", "", "write device messages and errors to this file")
@@ -99,23 +83,33 @@ func run(ctx context.Context, args []string) error {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		return runInfo(ctx, &conn, os.Stdout)
+		return runInfo(ctx, &conn, stdout)
 	case "screenshot":
 		out := fs.String("o", "screen.png", "output PNG file")
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
 		return runScreenshot(ctx, &conn, *out)
+	case "sniff":
+		return runSniff(ctx, fs, &conn, args, stdout)
+	case "presets":
+		return runPresets(ctx, fs, &conn, args, stdout)
+	case "serve":
+		addr := fs.String("addr", "localhost:8080", "address to listen on; the page can change the device's settings, so keep it local unless the network is trusted")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		return runServe(ctx, &conn, *addr)
 	case "help":
-		fmt.Print(usage)
-		return nil
+		_, err := fmt.Fprint(stdout, usage)
+		return err
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 }
 
-func runTUI(ctx context.Context, conn *connection, logPath string) error {
+func runTUI(ctx context.Context, conn *cli.Connection, logPath string) error {
 	var logger *slog.Logger
 	if logPath != "" {
 		f, err := os.Create(logPath)
@@ -125,7 +119,7 @@ func runTUI(ctx context.Context, conn *connection, logPath string) error {
 		defer f.Close() //nolint:errcheck // best-effort debug log
 		logger = slog.New(slog.NewTextHandler(f, nil))
 	}
-	dev, err := conn.open(ctx)
+	dev, err := conn.Open(ctx, connectTimeout)
 	if err != nil {
 		return err
 	}
@@ -133,8 +127,8 @@ func runTUI(ctx context.Context, conn *connection, logPath string) error {
 	return tui.Run(ctx, dev, tui.Options{Logger: logger})
 }
 
-func runInfo(ctx context.Context, conn *connection, w io.Writer) error {
-	dev, err := conn.open(ctx)
+func runInfo(ctx context.Context, conn *cli.Connection, w io.Writer) error {
+	dev, err := conn.Open(ctx, connectTimeout)
 	if err != nil {
 		return err
 	}
@@ -147,25 +141,32 @@ func runInfo(ctx context.Context, conn *connection, w io.Writer) error {
 		return fmt.Errorf("reading serial number: %w", err)
 	}
 	info := dev.Info()
-	c := dev.Config()
 	var b strings.Builder
 	fmt.Fprintf(&b, "Main board:      %s\n", info.Main)
 	fmt.Fprintf(&b, "Expansion board: %s\n", info.Expansion)
 	fmt.Fprintf(&b, "Firmware:        %s\n", info.Firmware)
 	fmt.Fprintf(&b, "Serial number:   %s\n", rfx.FormatSerialNumber(serial))
-	fmt.Fprintf(&b, "Active module:   %s (%s)\n", c.Module(), dev.ActiveModel())
-	fmt.Fprintf(&b, "Mode:            %s\n", c.Mode)
-	fmt.Fprintf(&b, "Sweep:           %s to %s, %d points, step %s\n", c.Start, c.Stop(), c.Points, c.Step)
-	fmt.Fprintf(&b, "RBW:             %s\n", c.RBW)
-	fmt.Fprintf(&b, "Amplitude:       %d to %d dBm\n", c.AmpBottom, c.AmpTop)
-	fmt.Fprintf(&b, "Calculator:      %s\n", c.Calculator)
-	fmt.Fprintf(&b, "Board range:     %s to %s, max span %s\n", c.MinFreq, c.MaxFreq, c.MaxSpan)
+	if s, ok := dev.Sniffer(); ok {
+		fmt.Fprintf(&b, "Mode:            sniffer at %s, RBW %s, threshold %.1f dBm, delay %d\n", s.Start, s.RBW, s.ThresholdDBm, s.Delay)
+	} else {
+		c := dev.Config()
+		fmt.Fprintf(&b, "Active module:   %s (%s)\n", c.Module(), dev.ActiveModel())
+		fmt.Fprintf(&b, "Mode:            %s\n", c.Mode)
+		fmt.Fprintf(&b, "Sweep:           %s to %s, %d points, step %s\n", c.Start, c.Stop(), c.Points, c.Step)
+		fmt.Fprintf(&b, "RBW:             %s\n", c.RBW)
+		fmt.Fprintf(&b, "Amplitude:       %d to %d dBm, offset %d dB\n", c.AmpBottom, c.AmpTop, c.AmpOffset)
+		fmt.Fprintf(&b, "Calculator:      %s\n", c.Calculator)
+		fmt.Fprintf(&b, "Board range:     %s to %s, max span %s\n", c.MinFreq, c.MaxFreq, c.MaxSpan)
+	}
+	if dev.SupportsInputStage() {
+		fmt.Fprintf(&b, "Input stage:     %s\n", dev.InputStage())
+	}
 	_, err = io.WriteString(w, b.String())
 	return err
 }
 
-func runScreenshot(ctx context.Context, conn *connection, path string) error {
-	dev, err := conn.open(ctx)
+func runScreenshot(ctx context.Context, conn *cli.Connection, path string) error {
+	dev, err := conn.Open(ctx, connectTimeout)
 	if err != nil {
 		return err
 	}
@@ -186,4 +187,34 @@ func runScreenshot(ctx context.Context, conn *connection, path string) error {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return f.Close()
+}
+
+func runServe(ctx context.Context, conn *cli.Connection, addr string) error {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	dev, err := conn.Open(ctx, connectTimeout)
+	if err != nil {
+		return err
+	}
+	defer dev.Close() //nolint:errcheck // exiting, nothing to do with the error
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Handler:           web.New(dev, logger),
+		ReadHeaderTimeout: 10 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
+	logger.Info("serving", "url", "http://"+ln.Addr().String())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ln) }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
 }
