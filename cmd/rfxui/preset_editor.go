@@ -326,9 +326,9 @@ func (e *presetEditor) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 			dims := e.bandSetDropdown.Layout(gtx, th)
 			if e.bandSetDropdown.Changed && e.bandSetDropdown.Selected > 0 {
 				bs := e.bandSets[e.bandSetDropdown.Selected-1]
-				minKHz, maxKHz := bs.SpanKHz()
-				e.minFreqInput.SetText(strconv.Itoa(minKHz))
-				e.maxFreqInput.SetText(strconv.Itoa(maxKHz))
+				lo, hi := bs.Span()
+				e.minFreqInput.SetText(strconv.FormatInt(int64(lo/rfx.KHz), 10))
+				e.maxFreqInput.SetText(strconv.FormatInt(int64((hi+rfx.KHz-1)/rfx.KHz), 10))
 			}
 			return dims
 		}},

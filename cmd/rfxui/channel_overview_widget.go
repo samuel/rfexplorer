@@ -13,7 +13,9 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
+	"samuelks.com/rfx"
 	"samuelks.com/rfx/bands"
+	"samuelks.com/rfx/trace"
 )
 
 const chanRowDp unit.Dp = 36
@@ -29,15 +31,13 @@ type ChannelOverviewWidget struct {
 	selectedChan int
 	clicks       [][]gesture.Click
 
-	mu           sync.Mutex
-	min, max     float64
-	bandSet      *bands.BandSet
-	startFreqKHz int
-	freqStepHz   int
-	values       []float64
-	chanMaxPower [][]float64
-	spanMinKHz   int
-	spanMaxKHz   int
+	mu       sync.Mutex
+	min, max float64
+	bandSet  *bands.BandSet
+	sweep    rfx.Sweep
+	maxHold  trace.MaxHold
+	spanLo   rfx.Frequency
+	spanHi   rfx.Frequency
 }
 
 func NewChannelOverviewWidget() *ChannelOverviewWidget {
@@ -53,33 +53,20 @@ func (cw *ChannelOverviewWidget) SetBandSet(bs *bands.BandSet) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	cw.bandSet = bs
+	cw.maxHold.Reset()
 	if bs == nil {
 		cw.clicks = nil
-		cw.chanMaxPower = nil
-		cw.spanMinKHz = 0
-		cw.spanMaxKHz = 0
+		cw.spanLo, cw.spanHi = 0, 0
 	} else {
-		cw.spanMinKHz, cw.spanMaxKHz = bs.SpanKHz()
+		cw.spanLo, cw.spanHi = bs.Span()
 		cw.clicks = make([][]gesture.Click, len(bs.Bands))
-		cw.chanMaxPower = make([][]float64, len(bs.Bands))
 		for bi, band := range bs.Bands {
 			cw.clicks[bi] = make([]gesture.Click, len(band.Channels))
-			cw.chanMaxPower[bi] = make([]float64, len(band.Channels))
-			for ci := range cw.chanMaxPower[bi] {
-				cw.chanMaxPower[bi][ci] = cw.min
-			}
 		}
 	}
 	// Reset selection since band set changed.
 	cw.selectedBand = -1
 	cw.selectedChan = -1
-}
-
-func (cw *ChannelOverviewWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
-	cw.startFreqKHz = startFreqKHz
-	cw.freqStepHz = freqStepHz
 }
 
 // SetAmplitude updates the displayed amplitude range and resets per-channel max-hold data.
@@ -88,61 +75,20 @@ func (cw *ChannelOverviewWidget) SetAmplitude(bottom, top int) {
 	defer cw.mu.Unlock()
 	cw.min = float64(bottom)
 	cw.max = float64(top)
-	for bi := range cw.chanMaxPower {
-		for ci := range cw.chanMaxPower[bi] {
-			cw.chanMaxPower[bi][ci] = float64(bottom)
-		}
-	}
+	cw.maxHold.Reset()
 }
 
-func (cw *ChannelOverviewWidget) Update(values []float64) {
+func (cw *ChannelOverviewWidget) Update(s *rfx.Sweep) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
-	if len(cw.values) != len(values) {
-		cw.values = make([]float64, len(values))
-	}
-	copy(cw.values, values)
-	if cw.bandSet == nil || cw.freqStepHz == 0 || len(cw.values) == 0 {
-		return
-	}
-	startHz := cw.startFreqKHz * 1000
-	for bi, band := range cw.bandSet.Bands {
-		if bi >= len(cw.chanMaxPower) {
-			break
-		}
-		for ci, ch := range band.Channels {
-			if ci >= len(cw.chanMaxPower[bi]) {
-				break
-			}
-			loHz := ch.CenterKHz*1000 - ch.WidthKHz*1000/2
-			hiHz := ch.CenterKHz*1000 + ch.WidthKHz*1000/2
-			loIdx := (loHz - startHz) / cw.freqStepHz
-			hiIdx := (hiHz - startHz) / cw.freqStepHz
-			if loIdx < 0 {
-				loIdx = 0
-			}
-			if hiIdx >= len(cw.values) {
-				hiIdx = len(cw.values) - 1
-			}
-			if loIdx > hiIdx {
-				continue
-			}
-			maxPow := cw.values[loIdx]
-			for _, v := range cw.values[loIdx+1 : hiIdx+1] {
-				if v > maxPow {
-					maxPow = v
-				}
-			}
-			if maxPow > cw.chanMaxPower[bi][ci] {
-				cw.chanMaxPower[bi][ci] = maxPow
-			}
-		}
-	}
+	cw.sweep.Time, cw.sweep.Start, cw.sweep.Step = s.Time, s.Start, s.Step
+	cw.sweep.Samples = append(cw.sweep.Samples[:0], s.Samples...)
+	cw.maxHold.Add(s)
 }
 
-// SelectedRange returns the frequency range (kHz) of the selected channel,
-// or ok=false if no channel is selected.
-func (cw *ChannelOverviewWidget) SelectedRange() (loKHz, hiKHz int, ok bool) {
+// SelectedRange returns the frequency range of the selected channel, or
+// ok=false if no channel is selected.
+func (cw *ChannelOverviewWidget) SelectedRange() (lo, hi rfx.Frequency, ok bool) {
 	if cw.selectedBand < 0 {
 		return 0, 0, false
 	}
@@ -156,21 +102,44 @@ func (cw *ChannelOverviewWidget) SelectedRange() (loKHz, hiKHz int, ok bool) {
 		return 0, 0, false
 	}
 	ch := band.Channels[cw.selectedChan]
-	return ch.CenterKHz - ch.WidthKHz/2, ch.CenterKHz + ch.WidthKHz/2, true
+	return ch.Low(), ch.High(), true
+}
+
+// channelLevels returns the peak level of every channel in the latest sweep
+// and in the max-hold trace, using ampMin where a channel is outside the
+// sweep.
+func (cw *ChannelOverviewWidget) channelLevels(bs *bands.BandSet, ampMin float64) (current, held [][]float64) {
+	maxTrace := cw.maxHold.Trace()
+	level := func(s *rfx.Sweep, ch bands.Channel) float64 {
+		if _, v, ok := trace.Peak(s, ch.Low(), ch.High()); ok {
+			return float64(v)
+		}
+		return ampMin
+	}
+	current = make([][]float64, len(bs.Bands))
+	held = make([][]float64, len(bs.Bands))
+	for bi, band := range bs.Bands {
+		current[bi] = make([]float64, len(band.Channels))
+		held[bi] = make([]float64, len(band.Channels))
+		for ci, ch := range band.Channels {
+			current[bi][ci] = level(&cw.sweep, ch)
+			held[bi][ci] = level(&maxTrace, ch)
+		}
+	}
+	return current, held
 }
 
 func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
 	cw.mu.Lock()
 	bs := cw.bandSet
 	clicks := cw.clicks
-	chanMaxPower := cw.chanMaxPower
-	spanMinKHz := cw.spanMinKHz
-	spanMaxKHz := cw.spanMaxKHz
-	startFreqKHz := cw.startFreqKHz
-	freqStepHz := cw.freqStepHz
-	values := cw.values
+	spanLo, spanHi := cw.spanLo, cw.spanHi
 	ampMin := cw.min
 	ampMax := cw.max
+	var channelCurrent, chanMaxPower [][]float64
+	if bs != nil {
+		channelCurrent, chanMaxPower = cw.channelLevels(bs, ampMin)
+	}
 	cw.mu.Unlock()
 
 	if bs == nil || len(bs.Bands) == 0 {
@@ -192,8 +161,8 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 	paint.FillShape(gtx.Ops, color.NRGBA{R: 0x10, G: 0x10, B: 0x10, A: 0xff},
 		clip.Rect(image.Rectangle{Max: image.Pt(w, totalH)}).Op())
 
-	spanKHz := spanMaxKHz - spanMinKHz
-	if spanKHz <= 0 {
+	span := spanHi - spanLo
+	if span <= 0 {
 		return layout.Dimensions{Size: image.Pt(w, totalH)}
 	}
 
@@ -226,38 +195,6 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 
 	selectedBand := cw.selectedBand
 	selectedChan := cw.selectedChan
-
-	// Compute current per-channel max from the latest sweep values.
-	// channelCurrent[bi][ci] = max dBm in channel's freq range this sweep.
-	channelCurrent := make([][]float64, numBands)
-	for bi, band := range bs.Bands {
-		channelCurrent[bi] = make([]float64, len(band.Channels))
-		for ci, ch := range band.Channels {
-			channelCurrent[bi][ci] = ampMin
-			if freqStepHz > 0 && len(values) > 0 {
-				startHz := startFreqKHz * 1000
-				loHz := ch.CenterKHz*1000 - ch.WidthKHz*1000/2
-				hiHz := ch.CenterKHz*1000 + ch.WidthKHz*1000/2
-				loIdx := (loHz - startHz) / freqStepHz
-				hiIdx := (hiHz - startHz) / freqStepHz
-				if loIdx < 0 {
-					loIdx = 0
-				}
-				if hiIdx >= len(values) {
-					hiIdx = len(values) - 1
-				}
-				if loIdx <= hiIdx {
-					cur := values[loIdx]
-					for _, v := range values[loIdx+1 : hiIdx+1] {
-						if v > cur {
-							cur = v
-						}
-					}
-					channelCurrent[bi][ci] = cur
-				}
-			}
-		}
-	}
 
 	// Render.
 	for bi, band := range bs.Bands {
@@ -292,10 +229,8 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 				break
 			}
 
-			chLeftKHz := ch.CenterKHz - ch.WidthKHz/2
-			chRightKHz := ch.CenterKHz + ch.WidthKHz/2
-			leftX := (chLeftKHz - spanMinKHz) * w / spanKHz
-			rightX := (chRightKHz - spanMinKHz) * w / spanKHz
+			leftX := int((ch.Low() - spanLo) * rfx.Frequency(w) / span)
+			rightX := int((ch.High() - spanLo) * rfx.Frequency(w) / span)
 			if rightX <= leftX {
 				rightX = leftX + 1
 			}

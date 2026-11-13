@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 )
 
-// LoadFile loads BandSets from a JSON file. Returns an empty slice (not an
+// LoadFile loads and validates BandSets from a JSON file. Frequencies are
+// strings such as "462.5625MHz". Returns an empty slice (not an
 // error) if the file does not exist.
 func LoadFile(path string) ([]*BandSet, error) {
 	data, err := os.ReadFile(path)
@@ -21,6 +22,14 @@ func LoadFile(path string) ([]*BandSet, error) {
 	var sets []*BandSet
 	if err := json.Unmarshal(data, &sets); err != nil {
 		return nil, fmt.Errorf("parsing band sets file: %w", err)
+	}
+	for i, bs := range sets {
+		if bs == nil {
+			return nil, fmt.Errorf("band sets file: entry %d is null", i)
+		}
+		if err := bs.Validate(); err != nil {
+			return nil, fmt.Errorf("band sets file: %w", err)
+		}
 	}
 	return sets, nil
 }

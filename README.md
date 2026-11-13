@@ -6,7 +6,9 @@ Go library and tools for RF Explorer handheld spectrum analyzers over serial.
 Documentation: https://pkg.go.dev/samuelks.com/rfx
 
 - `samuelks.com/rfx` — protocol library (repository root)
-- `bands` — channel plans (WiFi, FPV video, MURS, GMRS) and custom band sets
+- `bands` — channel plans (WiFi, FPV video, Zigbee, MURS, GMRS) and custom band sets
+- `trace` — UI-independent sweep processing: max hold, linear-power averaging
+  and channel power, peak search, waterfall images and color gradients
 - `cmd/rfxui` — desktop GUI
 - `cmd/rfexplorer` — terminal spectrum display
 
@@ -64,6 +66,30 @@ return dev.Err() // nil if the subscription ended because of Close
 - Frequencies are `rfx.Frequency` values in hertz. Levels are in dBm.
 - Package `rfxtest` provides an in-memory fake device for testing code that
   uses the library without hardware.
+
+Custom band sets
+----------------
+
+`rfxui` merges the built-in band sets with
+`<user config dir>/rfexplorer/bands.json`; a set with the same name as a
+built-in replaces it. Frequencies are strings with a unit:
+
+```json
+[
+  {
+    "name": "My radios",
+    "bands": [
+      {
+        "name": "UHF",
+        "channels": [{"name": "1", "center": "462.5625MHz", "width": "12.5kHz"}]
+      }
+    ]
+  }
+]
+```
+
+Every set, band and channel needs a name, and centers and widths must be
+positive.
 
 Supported hardware
 ------------------

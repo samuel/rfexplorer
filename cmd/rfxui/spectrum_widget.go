@@ -14,7 +14,8 @@ import (
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/widget/material"
-	"samuelks.com/rfx/bands"
+	"samuelks.com/rfx"
+	"samuelks.com/rfx/trace"
 )
 
 const heatMapHeight = 256
@@ -43,38 +44,37 @@ func bandLabelColor(i int) color.NRGBA {
 }
 
 type SpectrumWidget struct {
+	// UI-goroutine-only fields:
+	hoverX   int
+	gradient trace.Gradient
+
 	mu             sync.Mutex
 	min, max       float64
-	values         []float64
-	maxValues      []float64
-	maxHold        bool
+	sweep          rfx.Sweep
+	maxHold        trace.MaxHold
+	maxHoldEnabled bool
 	heatMapEnabled bool
 	heatMap        []int
 	heatMapImg     *image.RGBA
 	heatMapMax     int
-	startFreqKHz   int
-	freqStepHz     int
-	hoverX         int
-	bandSet        *bands.BandSet
-	highlightLoKHz int
-	highlightHiKHz int
+	highlightLo    rfx.Frequency
+	highlightHi    rfx.Frequency
 }
 
 func NewSpectrumWidget() *SpectrumWidget {
 	sw := &SpectrumWidget{
 		min:            -120,
 		max:            0,
-		maxHold:        true,
+		maxHoldEnabled: true,
 		heatMapEnabled: true,
 		hoverX:         -1,
+		gradient:       trace.DefaultGradient(),
 	}
 	return sw
 }
 
 func (sw *SpectrumWidget) resetLocked() {
-	for i := range sw.maxValues {
-		sw.maxValues[i] = sw.min
-	}
+	sw.maxHold.Reset()
 	for i := range sw.heatMap {
 		sw.heatMap[i] = 0
 	}
@@ -96,31 +96,26 @@ func (sw *SpectrumWidget) SetAmplitude(bottom, top int) {
 	sw.resetLocked()
 }
 
-func (sw *SpectrumWidget) Update(values []float64) {
+func (sw *SpectrumWidget) Update(s *rfx.Sweep) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
-	if len(sw.values) != len(values) {
-		sw.values = make([]float64, len(values))
-		sw.maxValues = make([]float64, len(values))
-		for i := range sw.maxValues {
-			sw.maxValues[i] = sw.min
-		}
-		sw.heatMap = make([]int, len(values)*heatMapHeight)
+	if len(sw.sweep.Samples) != len(s.Samples) {
+		sw.heatMap = make([]int, len(s.Samples)*heatMapHeight)
 		sw.heatMapMax = 0
 	}
-	copy(sw.values, values)
-	for i, v := range values {
-		if v > sw.maxValues[i] {
-			sw.maxValues[i] = v
-		}
+	sw.sweep.Time, sw.sweep.Start, sw.sweep.Step = s.Time, s.Start, s.Step
+	sw.sweep.Samples = append(sw.sweep.Samples[:0], s.Samples...)
+	sw.maxHold.Add(s)
+	n := len(s.Samples)
+	for i, v := range s.Samples {
 		if sw.heatMapEnabled {
-			a := (v - sw.min) / (sw.max - sw.min)
+			a := (float64(v) - sw.min) / (sw.max - sw.min)
 			if a < 0 {
 				a = 0
 			} else if a > 1 {
 				a = 1
 			}
-			o := int(a*(heatMapHeight-1))*len(values) + i
+			o := int(a*(heatMapHeight-1))*n + i
 			hm := sw.heatMap[o] + 1
 			sw.heatMap[o] = hm
 			if hm > sw.heatMapMax {
@@ -130,34 +125,35 @@ func (sw *SpectrumWidget) Update(values []float64) {
 	}
 }
 
-func (sw *SpectrumWidget) SetFreqConfig(startFreqKHz, freqStepHz int) {
+// SetHighlight marks a frequency range to highlight in the spectrum.
+func (sw *SpectrumWidget) SetHighlight(lo, hi rfx.Frequency) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
-	sw.startFreqKHz = startFreqKHz
-	sw.freqStepHz = freqStepHz
-}
-
-// SetBandSet sets the active band set (used for highlight range mapping). Pass nil to clear.
-func (sw *SpectrumWidget) SetBandSet(bs *bands.BandSet) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	sw.bandSet = bs
-}
-
-// SetHighlight marks a frequency range (in kHz) to highlight in the spectrum.
-func (sw *SpectrumWidget) SetHighlight(loKHz, hiKHz int) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	sw.highlightLoKHz = loKHz
-	sw.highlightHiKHz = hiKHz
+	sw.highlightLo = lo
+	sw.highlightHi = hi
 }
 
 // ClearHighlight removes any active frequency highlight.
 func (sw *SpectrumWidget) ClearHighlight() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	sw.highlightLoKHz = 0
-	sw.highlightHiKHz = 0
+	sw.SetHighlight(0, 0)
+}
+
+// sampleX returns the pixel column of sample i of n across width w.
+func sampleX(i, n, w int) int {
+	if n <= 1 {
+		return 0
+	}
+	return i * (w - 1) / (n - 1)
+}
+
+// levelY returns the pixel row of level v across height h for the range
+// [lo, hi], clamped to the widget.
+func levelY(v, lo, hi float64, h int) int {
+	a := 0.0
+	if hi != lo {
+		a = min(max((v-lo)/(hi-lo), 0), 1)
+	}
+	return (h - 1) - int(float64(h-1)*a)
 }
 
 const (
@@ -236,20 +232,21 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 		}
 	}
 
-	if sw.heatMapEnabled {
-		if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != len(sw.values) || sw.heatMapImg.Bounds().Dy() != heatMapHeight {
-			sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, len(sw.values), heatMapHeight))
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	n := len(sw.sweep.Samples)
+
+	if sw.heatMapEnabled && n > 0 {
+		if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != n || sw.heatMapImg.Bounds().Dy() != heatMapHeight {
+			sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, n, heatMapHeight))
 		}
 		for y := range heatMapHeight {
-			for x := range len(sw.values) {
+			for x := range n {
 				var v float64
 				if sw.heatMapMax > 0 {
-					v = float64(sw.heatMap[((heatMapHeight-1)-y)*len(sw.values)+x]) / float64(sw.heatMapMax)
-					if v > 1 {
-						v = 1
-					}
+					v = float64(sw.heatMap[((heatMapHeight-1)-y)*n+x]) / float64(sw.heatMapMax)
 				}
-				c := gradientColorForValue(v)
+				c := sw.gradient.At(v)
 				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4] = c.R
 				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4+1] = c.G
 				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4+2] = c.B
@@ -287,9 +284,6 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 			}.Op())
 	}
 
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
 	// Amplitude Y-axis labels at the top and each horizontal grid line.
 	labelColor := color.NRGBA{R: 0xaa, G: 0xaa, B: 0xaa, A: 0xff}
 	labelH := gtx.Sp(11)
@@ -311,14 +305,13 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 	}
 
 	// Highlight rect: draw a translucent overlay for the selected channel range.
-	if sw.highlightLoKHz != sw.highlightHiKHz && sw.freqStepHz > 0 && len(sw.values) > 1 {
-		startHz := sw.startFreqKHz * 1000
-		n := len(sw.values) - 1
-		hzToPixel := func(hz int) int {
-			return (hz - startHz) * (w - 1) / (sw.freqStepHz * n)
+	if sw.highlightLo != sw.highlightHi && sw.sweep.Step > 0 && n > 1 {
+		span := sw.sweep.Step * rfx.Frequency(n-1)
+		freqToPixel := func(f rfx.Frequency) int {
+			return int((f - sw.sweep.Start) * rfx.Frequency(w-1) / span)
 		}
-		leftX := max(hzToPixel(sw.highlightLoKHz*1000), 0)
-		rightX := min(hzToPixel(sw.highlightHiKHz*1000), w)
+		leftX := max(freqToPixel(sw.highlightLo), 0)
+		rightX := min(freqToPixel(sw.highlightHi), w)
 		if leftX < rightX {
 			paint.FillShape(gtx.Ops, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x28},
 				clip.Rect(image.Rectangle{
@@ -328,95 +321,46 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 		}
 	}
 
-	if sw.maxHold {
+	maxTrace := sw.maxHold.Trace()
+	strokeTrace := func(samples []float32, width float32, col color.NRGBA) {
+		if len(samples) == 0 {
+			return
+		}
 		var path clip.Path
 		path.Begin(gtx.Ops)
-		for i, v := range sw.maxValues {
-			a := (v - sw.min) / (sw.max - sw.min)
-			if a < 0 {
-				a = 0
-			} else if a > 1 {
-				a = 1
-			}
-			y := (h - 1) - int((float64(h)-1)*a)
-			x := i * (w - 1) / (len(sw.values) - 1)
+		for i, v := range samples {
+			pt := f32.Pt(float32(sampleX(i, len(samples), w)), float32(levelY(float64(v), sw.min, sw.max, h)))
 			if i == 0 {
-				path.MoveTo(f32.Pt(float32(x), float32(y)))
+				path.MoveTo(pt)
 			} else {
-				path.LineTo(f32.Pt(float32(x), float32(y)))
+				path.LineTo(pt)
 			}
 		}
-		paint.FillShape(gtx.Ops, color.NRGBA{R: 0xa0, G: 0, B: 0, A: 0xff},
-			clip.Stroke{
-				Path:  path.End(),
-				Width: 2,
-			}.Op())
+		paint.FillShape(gtx.Ops, col, clip.Stroke{Path: path.End(), Width: width}.Op())
 	}
-
-	var path clip.Path
-	path.Begin(gtx.Ops)
-	for i, v := range sw.values {
-		y := (h - 1) - int((float64(h)-1)*(v-sw.min)/(sw.max-sw.min))
-		x := i * (w - 1) / (len(sw.values) - 1)
-		if i == 0 {
-			path.MoveTo(f32.Pt(float32(x), float32(y)))
-		} else {
-			path.LineTo(f32.Pt(float32(x), float32(y)))
-		}
+	if sw.maxHoldEnabled {
+		strokeTrace(maxTrace.Samples, 2, color.NRGBA{R: 0xa0, G: 0, B: 0, A: 0xff})
 	}
-	paint.FillShape(gtx.Ops, color.NRGBA{R: 0x80, G: 0x80, B: 0xff, A: 0xff},
-		clip.Stroke{
-			Path:  path.End(),
-			Width: 4,
-		}.Op())
+	strokeTrace(sw.sweep.Samples, 4, color.NRGBA{R: 0x80, G: 0x80, B: 0xff, A: 0xff})
 
-	// Peak marker: find the highest value in maxValues.
-	if len(sw.maxValues) > 1 && sw.freqStepHz > 0 {
-		peakIdx := 0
-		peakVal := sw.maxValues[0]
-		for i, v := range sw.maxValues[1:] {
-			if v > peakVal {
-				peakVal = v
-				peakIdx = i + 1
-			}
-		}
-
-		peakA := (peakVal - sw.min) / (sw.max - sw.min)
-		if peakA < 0 {
-			peakA = 0
-		} else if peakA > 1 {
-			peakA = 1
-		}
-		peakX := peakIdx * (w - 1) / (len(sw.maxValues) - 1)
-		peakY := (h - 1) - int(float64(h-1)*peakA)
-
-		freqMHz := (float64(sw.startFreqKHz) + float64(peakIdx)*float64(sw.freqStepHz)/1000.0) / 1000.0
-		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", freqMHz, peakVal)
+	// Peak marker at the highest max-hold level.
+	if peakIdx, peakVal := maxTrace.Peak(); peakIdx >= 0 && maxTrace.Step > 0 {
+		peakX := sampleX(peakIdx, len(maxTrace.Samples), w)
+		peakY := levelY(float64(peakVal), sw.min, sw.max, h)
+		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", maxTrace.FrequencyAt(peakIdx).MHz(), peakVal)
 		drawMarker(gtx, th, peakX, peakY, w, label, color.NRGBA{R: 0xff, G: 0xe0, B: 0x00, A: 0xff})
 	}
 
 	// Hover marker: show frequency and power at the cursor position.
-	if sw.hoverX >= 0 && len(sw.values) > 1 && sw.freqStepHz > 0 {
-		// Map pixel x back to sample index.
-		hoverIdx := sw.hoverX * (len(sw.values) - 1) / (w - 1)
-		if hoverIdx < 0 {
-			hoverIdx = 0
-		} else if hoverIdx >= len(sw.values) {
-			hoverIdx = len(sw.values) - 1
+	if sw.hoverX >= 0 && n > 0 && sw.sweep.Step > 0 {
+		hoverIdx := 0
+		if w > 1 {
+			hoverIdx = min(max(sw.hoverX*(n-1)/(w-1), 0), n-1)
 		}
-		hoverVal := sw.values[hoverIdx]
-
-		hoverA := (hoverVal - sw.min) / (sw.max - sw.min)
-		if hoverA < 0 {
-			hoverA = 0
-		} else if hoverA > 1 {
-			hoverA = 1
-		}
-		hoverPixX := hoverIdx * (w - 1) / (len(sw.values) - 1)
-		hoverPixY := (h - 1) - int(float64(h-1)*hoverA)
-
-		freqMHz := (float64(sw.startFreqKHz) + float64(hoverIdx)*float64(sw.freqStepHz)/1000.0) / 1000.0
-		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", freqMHz, hoverVal)
+		hoverVal := sw.sweep.Samples[hoverIdx]
+		hoverPixX := sampleX(hoverIdx, n, w)
+		hoverPixY := levelY(float64(hoverVal), sw.min, sw.max, h)
+		label := fmt.Sprintf("%.3f MHz\n%.1f dBm", sw.sweep.FrequencyAt(hoverIdx).MHz(), hoverVal)
 		drawMarker(gtx, th, hoverPixX, hoverPixY, w, label, color.NRGBA{R: 0x00, G: 0xff, B: 0xff, A: 0xff})
 	}
 

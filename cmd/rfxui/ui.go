@@ -124,7 +124,7 @@ func NewUI(rfe *rfx.Device) *UI {
 			customSets = custom
 		}
 	}
-	bandSets := bands.MergeSets(bands.Builtins, customSets)
+	bandSets := bands.MergeSets(bands.Builtins(), customSets)
 
 	cfg, err := loadUIConfig(uiConfigPath)
 	if err != nil {
@@ -157,22 +157,11 @@ func NewUI(rfe *rfx.Device) *UI {
 		leftBg:       color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff},
 		leftFg:       color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff},
 	}
-	w := NewWaterfall(112, 256, -120, 0, true, true)
-	ui.Waterfall = NewWaterfallWidget(w)
+	ui.Waterfall = NewWaterfallWidget(256)
 	ui.Spectrum = NewSpectrumWidget()
 	ui.ChannelOverview = NewChannelOverviewWidget()
 	// ui.WifiSpectrum = NewWifiSpectrumWidget(2400000, 2495000, ui.Theme)
 	return ui
-}
-
-// bandSetByName returns the BandSet with the given name, or nil if not found.
-func (ui *UI) bandSetByName(name string) *bands.BandSet {
-	for _, bs := range ui.bandSets {
-		if bs.Name == name {
-			return bs
-		}
-	}
-	return nil
 }
 
 // saveUIConfig persists uiConfig to disk in the background, logging any error.
@@ -193,15 +182,12 @@ func (ui *UI) setRFEConfig(cfg rfx.SweepConfig) {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
-	startKHz, stepHz := int(cfg.Start/rfx.KHz), int(cfg.Step)
 	ui.rfeConfig = cfg
 	ui.expModuleActive = cfg.ExpansionActive
 	ui.expModuleSwitch.Value = cfg.ExpansionActive
-	ui.Spectrum.SetFreqConfig(startKHz, stepHz)
 	ui.Spectrum.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
-	ui.ChannelOverview.SetFreqConfig(startKHz, stepHz)
 	ui.ChannelOverview.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
-	ui.Waterfall.w.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
+	ui.Waterfall.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
 	ui.centerFrequencyInput.SetText(formatMHz(cfg.Center()))
 	ui.frequencySpanInput.SetText(formatMHz(cfg.Span()))
 	ui.Spectrum.Reset()
@@ -290,7 +276,6 @@ func (ui *UI) Run(w *app.Window) error {
 	go ui.refreshPresets(w)
 
 	go func() {
-		var samples []float64
 		for {
 			var msg rfx.Message
 			select {
@@ -308,13 +293,9 @@ func (ui *UI) Run(w *app.Window) error {
 			// TODO: make everything here concurrent safe
 			switch msg := msg.(type) {
 			case *rfx.Sweep:
-				samples = samples[:0]
-				for _, v := range msg.Samples {
-					samples = append(samples, float64(v))
-				}
-				ui.Waterfall.w.Update(samples)
-				ui.Spectrum.Update(samples)
-				ui.ChannelOverview.Update(samples)
+				ui.Waterfall.Update(msg)
+				ui.Spectrum.Update(msg)
+				ui.ChannelOverview.Update(msg)
 			case *rfx.SweepConfig:
 				ui.setRFEConfig(*msg)
 			}
@@ -364,9 +345,7 @@ func (ui *UI) Run(w *app.Window) error {
 				})
 				bandSetName := pe.SelectedBandSetName()
 				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
-				bs := ui.bandSetByName(bandSetName)
-				ui.Spectrum.SetBandSet(bs)
-				ui.ChannelOverview.SetBandSet(bs)
+				ui.ChannelOverview.SetBandSet(bands.Find(ui.bandSets, bandSetName))
 				ui.saveUIConfig()
 			}
 			if pe.PendingSave {
@@ -374,9 +353,7 @@ func (ui *UI) Run(w *app.Window) error {
 				p := pe.ToPreset()
 				bandSetName := pe.SelectedBandSetName()
 				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
-				bs := ui.bandSetByName(bandSetName)
-				ui.Spectrum.SetBandSet(bs)
-				ui.ChannelOverview.SetBandSet(bs)
+				ui.ChannelOverview.SetBandSet(bands.Find(ui.bandSets, bandSetName))
 				ui.saveUIConfig()
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
