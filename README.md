@@ -10,19 +10,36 @@ Documentation: https://pkg.go.dev/samuelks.com/rfx
 - `trace` — UI-independent sweep processing: max hold, linear-power averaging
   and channel power, peak search, waterfall images and color gradients
 - `cmd/rfxui` — desktop GUI
-- `cmd/rfexplorer` — terminal spectrum display
+- `cmd/rfexplorer` — terminal tools: spectrum display, device info, screenshots
 
 Usage
 -----
 
 ```bash
-go build ./cmd/rfexplorer && ./rfexplorer -dev /dev/ttyUSB0
+go build ./cmd/rfexplorer
+./rfexplorer -dev /dev/ttyUSB0                 # terminal spectrum display (same as "tui")
+./rfexplorer tui -log rfx.log                  # also log device messages and errors
+./rfexplorer info                              # model, firmware, serial number, configuration
+./rfexplorer screenshot -o screen.png          # save the device screen
+
 go build ./cmd/rfxui && ./rfxui -dev /dev/ttyUSB0
 ```
 
 The serial device is taken from `-dev`, then the `RFX_DEVICE` environment
 variable, then `/dev/tty.usbserial-0001`. The baud rate defaults to 500000 and
 can be changed with `-baud`.
+
+Neither tool changes the device's settings on startup. `rfxui` can do so on
+request: `-maxhold` switches the calculator to max hold and
+`-module main|expansion` selects a board.
+
+In the terminal display, `w` shows WiFi 2.4 GHz channel power, `v` names the
+5.8 GHz FPV channels at the peak, `m`/`r` switch between max hold and
+realtime, `h`/`c` hold and continue, `l` toggles the LCD, `s` mirrors the
+device screen, and `q` or Esc quits.
+
+In `rfxui`, Esc closes the preset editor, or the window when the editor is
+not open. Device errors are shown at the bottom of the sidebar.
 
 Library
 -------

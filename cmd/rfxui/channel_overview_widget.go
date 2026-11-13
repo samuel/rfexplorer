@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"sync"
 
 	"gioui.org/gesture"
 	"gioui.org/layout"
@@ -24,20 +23,18 @@ const chanRowDp unit.Dp = 36
 // Each band occupies a horizontal row; channels are rendered as VU-meter bars
 // positioned by frequency across the band set's span. Clicking a channel
 // selects it (highlighting its frequency range in the spectrum) and shows its
-// max received power. Clicking again deselects.
+// max received power. Clicking again deselects. It is used only from the UI
+// goroutine.
 type ChannelOverviewWidget struct {
-	// UI-goroutine-only fields (no mutex needed):
 	selectedBand int
 	selectedChan int
 	clicks       [][]gesture.Click
-
-	mu       sync.Mutex
-	min, max float64
-	bandSet  *bands.BandSet
-	sweep    rfx.Sweep
-	maxHold  trace.MaxHold
-	spanLo   rfx.Frequency
-	spanHi   rfx.Frequency
+	min, max     float64
+	bandSet      *bands.BandSet
+	sweep        rfx.Sweep
+	maxHold      trace.MaxHold
+	spanLo       rfx.Frequency
+	spanHi       rfx.Frequency
 }
 
 func NewChannelOverviewWidget() *ChannelOverviewWidget {
@@ -50,8 +47,6 @@ func NewChannelOverviewWidget() *ChannelOverviewWidget {
 }
 
 func (cw *ChannelOverviewWidget) SetBandSet(bs *bands.BandSet) {
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
 	cw.bandSet = bs
 	cw.maxHold.Reset()
 	if bs == nil {
@@ -69,18 +64,18 @@ func (cw *ChannelOverviewWidget) SetBandSet(bs *bands.BandSet) {
 	cw.selectedChan = -1
 }
 
-// SetAmplitude updates the displayed amplitude range and resets per-channel max-hold data.
+// SetAmplitude updates the displayed amplitude range, resetting the
+// per-channel max hold if it changed.
 func (cw *ChannelOverviewWidget) SetAmplitude(bottom, top int) {
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
+	if float64(bottom) == cw.min && float64(top) == cw.max {
+		return
+	}
 	cw.min = float64(bottom)
 	cw.max = float64(top)
 	cw.maxHold.Reset()
 }
 
 func (cw *ChannelOverviewWidget) Update(s *rfx.Sweep) {
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
 	cw.sweep.Time, cw.sweep.Start, cw.sweep.Step = s.Time, s.Start, s.Step
 	cw.sweep.Samples = append(cw.sweep.Samples[:0], s.Samples...)
 	cw.maxHold.Add(s)
@@ -92,8 +87,6 @@ func (cw *ChannelOverviewWidget) SelectedRange() (lo, hi rfx.Frequency, ok bool)
 	if cw.selectedBand < 0 {
 		return 0, 0, false
 	}
-	cw.mu.Lock()
-	defer cw.mu.Unlock()
 	if cw.bandSet == nil || cw.selectedBand >= len(cw.bandSet.Bands) {
 		return 0, 0, false
 	}
@@ -130,7 +123,6 @@ func (cw *ChannelOverviewWidget) channelLevels(bs *bands.BandSet, ampMin float64
 }
 
 func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
-	cw.mu.Lock()
 	bs := cw.bandSet
 	clicks := cw.clicks
 	spanLo, spanHi := cw.spanLo, cw.spanHi
@@ -140,7 +132,6 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 	if bs != nil {
 		channelCurrent, chanMaxPower = cw.channelLevels(bs, ampMin)
 	}
-	cw.mu.Unlock()
 
 	if bs == nil || len(bs.Bands) == 0 {
 		return layout.Dimensions{}

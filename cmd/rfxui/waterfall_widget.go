@@ -2,8 +2,6 @@ package main
 
 import (
 	"image"
-	"image/draw"
-	"sync"
 
 	"gioui.org/f32"
 	"gioui.org/layout"
@@ -13,70 +11,65 @@ import (
 	"samuelks.com/rfx/trace"
 )
 
-// WaterfallWidget draws a trace.Waterfall, one column per sweep point.
+// WaterfallWidget draws a trace.Waterfall, one column per sweep point. It
+// is used only from the UI goroutine.
 type WaterfallWidget struct {
-	// UI-goroutine-only fields:
-	img   *image.RGBA
-	src   paint.ImageOp
-	drawn int
-
-	mu      sync.Mutex
-	w       *trace.Waterfall
-	version int
+	w           *trace.Waterfall
+	start, step rfx.Frequency
+	first       paint.ImageOp
+	second      paint.ImageOp
+	firstRows   int
+	dirty       bool
 }
 
 func NewWaterfallWidget(height int) *WaterfallWidget {
-	return &WaterfallWidget{w: trace.NewWaterfall(1, height, -120, 0), drawn: -1}
+	return &WaterfallWidget{w: trace.NewWaterfall(1, height, -120, 0), dirty: true}
 }
 
-// Update adds a sweep as the newest row, resizing the waterfall to the
-// sweep's point count.
+// Update adds a sweep as the newest row. The waterfall is cleared when the
+// sweep's frequency axis changes, and resized to its point count.
 func (ww *WaterfallWidget) Update(s *rfx.Sweep) {
-	ww.mu.Lock()
-	defer ww.mu.Unlock()
+	if s.Start != ww.start || s.Step != ww.step {
+		ww.start, ww.step = s.Start, s.Step
+		ww.w.Clear()
+	}
 	_, h := ww.w.Size()
 	ww.w.Resize(len(s.Samples), h)
 	ww.w.Add(s.Samples)
-	ww.version++
+	ww.dirty = true
 }
 
 // SetAmplitude sets the displayed level range, clearing the waterfall if it
 // changed.
 func (ww *WaterfallWidget) SetAmplitude(bottom, top int) {
-	ww.mu.Lock()
-	defer ww.mu.Unlock()
 	ww.w.SetRange(float64(bottom), float64(top))
-	ww.version++
-}
-
-// snapshot copies the waterfall in display order into ww.img.
-func (ww *WaterfallWidget) snapshot() {
-	ww.mu.Lock()
-	defer ww.mu.Unlock()
-	if ww.version == ww.drawn && ww.img != nil {
-		return
-	}
-	ww.drawn = ww.version
-	w, h := ww.w.Size()
-	if ww.img == nil || ww.img.Rect.Dx() != w || ww.img.Rect.Dy() != h {
-		ww.img = image.NewRGBA(image.Rect(0, 0, w, h))
-	}
-	first, second := ww.w.Segments()
-	draw.Draw(ww.img, ww.img.Rect, first, first.Rect.Min, draw.Src)
-	draw.Draw(ww.img, ww.img.Rect.Add(image.Pt(0, first.Rect.Dy())), second, second.Rect.Min, draw.Src)
-	ww.src = paint.NewImageOp(ww.img)
+	ww.dirty = true
 }
 
 func (ww *WaterfallWidget) Layout(gtx layout.Context) layout.Dimensions {
-	gtx.Execute(op.InvalidateCmd{})
+	width, height := ww.w.Size()
+	if ww.dirty {
+		// The image ops reference the ring buffer directly. Gio uploads
+		// them during the frame, before the next sweep is added.
+		first, second := ww.w.Segments()
+		ww.first = paint.NewImageOp(first)
+		ww.second = paint.NewImageOp(second)
+		ww.firstRows = first.Rect.Dy()
+		ww.dirty = false
+	}
 
-	ww.snapshot()
-	b := ww.img.Bounds()
-	trans := f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(float32(gtx.Constraints.Max.X)/float32(b.Dx()), float32(gtx.Constraints.Max.Y)/float32(b.Dy())))
-	defer op.Affine(trans).Push(gtx.Ops).Pop()
+	size := gtx.Constraints.Max
+	scale := f32.Pt(float32(size.X)/float32(width), float32(size.Y)/float32(height))
+	defer op.Affine(f32.Affine2D{}.Scale(f32.Point{}, scale)).Push(gtx.Ops).Pop()
 
-	ww.src.Add(gtx.Ops)
+	ww.first.Add(gtx.Ops)
 	paint.PaintOp{}.Add(gtx.Ops)
+	if ww.firstRows < height {
+		off := op.Offset(image.Pt(0, ww.firstRows)).Push(gtx.Ops)
+		ww.second.Add(gtx.Ops)
+		paint.PaintOp{}.Add(gtx.Ops)
+		off.Pop()
+	}
 
-	return layout.Dimensions{Size: gtx.Constraints.Max}
+	return layout.Dimensions{Size: size}
 }

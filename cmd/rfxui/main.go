@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -26,43 +27,62 @@ func defaultDevice() string {
 }
 
 func main() {
-	flagDevice := flag.String("dev", defaultDevice(), "Path to serial device (default from RFX_DEVICE)")
-	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "Serial baud rate")
+	flagDevice := flag.String("dev", defaultDevice(), "path to serial device (default from RFX_DEVICE)")
+	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "serial baud rate")
+	flagMaxHold := flag.Bool("maxhold", false, "switch the device's calculator to max hold on startup")
+	flagModule := flag.String("module", "", `select the "main" or "expansion" board on startup`)
 	flag.Parse()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	go func() {
+		code := 0
+		if err := run(logger, *flagDevice, *flagBaud, *flagMaxHold, *flagModule); err != nil {
+			fmt.Fprintln(os.Stderr, "rfxui:", err)
+			code = 1
+		}
+		os.Exit(code)
+	}()
+	app.Main()
+}
+
+func run(logger *slog.Logger, path string, baud int, maxHold bool, module string) error {
+	var startModule *rfx.Module
+	switch module {
+	case "":
+	case "main":
+		m := rfx.ModuleMain
+		startModule = &m
+	case "expansion":
+		m := rfx.ModuleExpansion
+		startModule = &m
+	default:
+		return fmt.Errorf("invalid -module %q: want main or expansion", module)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
-	rfe, err := rfx.Open(ctx, *flagDevice, rfx.WithBaudRate(rfx.BaudRate(*flagBaud)))
+	dev, err := rfx.Open(ctx, path, rfx.WithBaudRate(rfx.BaudRate(baud)))
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("connecting to %s: %w", path, err)
 	}
-	defer rfe.Close() //nolint:errcheck // exiting, nothing to do with the error
+	defer dev.Close() //nolint:errcheck // exiting, nothing to do with the error
 
-	if err := rfe.SetLCD(ctx, true); err != nil {
-		log.Fatal(err)
-	}
-	if err := rfe.SetScreenDump(ctx, false); err != nil {
-		log.Fatal(err)
-	}
-	if err := rfe.SetCalculator(ctx, rfx.CalculatorMaxHold); err != nil {
-		log.Fatal(err)
-	}
-	if _, err := rfe.SelectModule(ctx, rfx.ModuleExpansion); err != nil {
-		log.Fatal(err)
-	}
-
-	ui := NewUI(rfe)
-
-	go func() {
-		w := new(app.Window)
-		w.Option(app.Title("RF-Explorer"))
-		w.Option(app.Size(unit.Dp(1200), unit.Dp(1024)))
-		if err := ui.Run(w); err != nil {
-			log.Println(err)
-			os.Exit(1)
+	// The device is only changed when asked to.
+	if maxHold {
+		if err := dev.SetCalculator(ctx, rfx.CalculatorMaxHold); err != nil {
+			return fmt.Errorf("setting max hold: %w", err)
 		}
-		os.Exit(0)
-	}()
+	}
+	if startModule != nil {
+		if _, err := dev.SelectModule(ctx, *startModule); err != nil {
+			return fmt.Errorf("selecting %s board: %w", module, err)
+		}
+	}
 
-	app.Main()
+	ui := NewUI(dev, logger)
+	defer ui.Close()
+	w := new(app.Window)
+	w.Option(app.Title("RF-Explorer"))
+	w.Option(app.Size(unit.Dp(1200), unit.Dp(1024)))
+	return ui.Run(w)
 }

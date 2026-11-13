@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"sync"
 
 	"gioui.org/f32"
 	"gioui.org/io/event"
@@ -43,20 +42,21 @@ func bandLabelColor(i int) color.NRGBA {
 	return color.NRGBA{R: c[0], G: c[1], B: c[2], A: 0xff}
 }
 
+// SpectrumWidget draws the latest sweep, its max hold and a heat map of how
+// often each level was seen. It is used only from the UI goroutine.
 type SpectrumWidget struct {
-	// UI-goroutine-only fields:
-	hoverX   int
-	gradient trace.Gradient
-
-	mu             sync.Mutex
+	hoverX         int
+	gradient       trace.Gradient
 	min, max       float64
 	sweep          rfx.Sweep
 	maxHold        trace.MaxHold
 	maxHoldEnabled bool
 	heatMapEnabled bool
 	heatMap        []int
-	heatMapImg     *image.RGBA
 	heatMapMax     int
+	heatMapImg     *image.RGBA
+	heatMapOp      paint.ImageOp
+	heatMapDirty   bool
 	highlightLo    rfx.Frequency
 	highlightHi    rfx.Frequency
 }
@@ -73,62 +73,72 @@ func NewSpectrumWidget() *SpectrumWidget {
 	return sw
 }
 
-func (sw *SpectrumWidget) resetLocked() {
+func (sw *SpectrumWidget) reset() {
 	sw.maxHold.Reset()
-	for i := range sw.heatMap {
-		sw.heatMap[i] = 0
-	}
+	clear(sw.heatMap)
 	sw.heatMapMax = 0
+	sw.heatMapDirty = true
 }
 
-func (sw *SpectrumWidget) Reset() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	sw.resetLocked()
-}
-
-// SetAmplitude updates the displayed amplitude range and resets accumulated data.
+// SetAmplitude updates the displayed amplitude range, resetting accumulated
+// data if it changed.
 func (sw *SpectrumWidget) SetAmplitude(bottom, top int) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
+	if float64(bottom) == sw.min && float64(top) == sw.max {
+		return
+	}
 	sw.min = float64(bottom)
 	sw.max = float64(top)
-	sw.resetLocked()
+	sw.reset()
 }
 
 func (sw *SpectrumWidget) Update(s *rfx.Sweep) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	if len(sw.sweep.Samples) != len(s.Samples) {
-		sw.heatMap = make([]int, len(s.Samples)*heatMapHeight)
+	n := len(s.Samples)
+	if len(sw.sweep.Samples) != n || sw.sweep.Start != s.Start || sw.sweep.Step != s.Step {
+		// A new frequency axis invalidates the heat map. MaxHold restarts
+		// on its own.
+		if len(sw.heatMap) != n*heatMapHeight {
+			sw.heatMap = make([]int, n*heatMapHeight)
+		}
+		clear(sw.heatMap)
 		sw.heatMapMax = 0
 	}
 	sw.sweep.Time, sw.sweep.Start, sw.sweep.Step = s.Time, s.Start, s.Step
 	sw.sweep.Samples = append(sw.sweep.Samples[:0], s.Samples...)
 	sw.maxHold.Add(s)
-	n := len(s.Samples)
+	if !sw.heatMapEnabled || sw.max == sw.min {
+		return
+	}
 	for i, v := range s.Samples {
-		if sw.heatMapEnabled {
-			a := (float64(v) - sw.min) / (sw.max - sw.min)
-			if a < 0 {
-				a = 0
-			} else if a > 1 {
-				a = 1
+		a := min(max((float64(v)-sw.min)/(sw.max-sw.min), 0), 1)
+		o := int(a*(heatMapHeight-1))*n + i
+		sw.heatMap[o]++
+		sw.heatMapMax = max(sw.heatMapMax, sw.heatMap[o])
+	}
+	sw.heatMapDirty = true
+}
+
+// renderHeatMap redraws the heat map image for n sweep points.
+func (sw *SpectrumWidget) renderHeatMap(n int) {
+	sw.heatMapDirty = false
+	if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != n {
+		sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, n, heatMapHeight))
+	}
+	for y := range heatMapHeight {
+		row := sw.heatMapImg.Pix[y*sw.heatMapImg.Stride:]
+		for x := range n {
+			var v float64
+			if sw.heatMapMax > 0 {
+				v = float64(sw.heatMap[((heatMapHeight-1)-y)*n+x]) / float64(sw.heatMapMax)
 			}
-			o := int(a*(heatMapHeight-1))*n + i
-			hm := sw.heatMap[o] + 1
-			sw.heatMap[o] = hm
-			if hm > sw.heatMapMax {
-				sw.heatMapMax = hm
-			}
+			c := sw.gradient.At(v)
+			row[x*4], row[x*4+1], row[x*4+2], row[x*4+3] = c.R, c.G, c.B, c.A
 		}
 	}
+	sw.heatMapOp = paint.NewImageOp(sw.heatMapImg)
 }
 
 // SetHighlight marks a frequency range to highlight in the spectrum.
 func (sw *SpectrumWidget) SetHighlight(lo, hi rfx.Frequency) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
 	sw.highlightLo = lo
 	sw.highlightHi = hi
 }
@@ -201,10 +211,6 @@ func drawMarker(gtx layout.Context, th *material.Theme, pixelX, tipY, widgetW in
 }
 
 func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.Dimensions {
-	gtx.Execute(op.InvalidateCmd{})
-
-	// TODO: optimize by not rerendering images, creating new image ops, etc.. if values haven't changed
-
 	w, h := gtx.Constraints.Max.X, gtx.Constraints.Max.Y
 
 	// Register pointer input over the full widget area.
@@ -232,31 +238,16 @@ func (sw *SpectrumWidget) Layout(gtx layout.Context, th *material.Theme) layout.
 		}
 	}
 
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
 	n := len(sw.sweep.Samples)
 
 	if sw.heatMapEnabled && n > 0 {
-		if sw.heatMapImg == nil || sw.heatMapImg.Bounds().Dx() != n || sw.heatMapImg.Bounds().Dy() != heatMapHeight {
-			sw.heatMapImg = image.NewRGBA(image.Rect(0, 0, n, heatMapHeight))
-		}
-		for y := range heatMapHeight {
-			for x := range n {
-				var v float64
-				if sw.heatMapMax > 0 {
-					v = float64(sw.heatMap[((heatMapHeight-1)-y)*n+x]) / float64(sw.heatMapMax)
-				}
-				c := sw.gradient.At(v)
-				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4] = c.R
-				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4+1] = c.G
-				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4+2] = c.B
-				sw.heatMapImg.Pix[y*sw.heatMapImg.Stride+x*4+3] = c.A
-			}
+		if sw.heatMapDirty || sw.heatMapImg == nil {
+			sw.renderHeatMap(n)
 		}
 		imgBounds := sw.heatMapImg.Bounds()
 		trans := f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(float32(w)/float32(imgBounds.Dx()), float32(h)/float32(imgBounds.Dy())))
 		aff := op.Affine(trans).Push(gtx.Ops)
-		paint.NewImageOp(sw.heatMapImg).Add(gtx.Ops)
+		sw.heatMapOp.Add(gtx.Ops)
 		paint.PaintOp{}.Add(gtx.Ops)
 		aff.Pop()
 	}

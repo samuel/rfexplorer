@@ -47,16 +47,82 @@ func (c *UIConfig) SetBandSetFor(presetIndex int, name string) {
 	}
 }
 
-// Save writes the config to path, creating parent directories as needed.
-func (c *UIConfig) Save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
+// configSaver writes the UI config on its own goroutine so saves never block
+// the UI. Saves requested while one is in progress are coalesced: only the
+// latest is written.
+type configSaver struct {
+	path    string
+	onError func(error)
+	pending chan []byte
+	done    chan struct{}
+}
+
+// newConfigSaver starts a saver for path. onError is called from the
+// saver's goroutine.
+func newConfigSaver(path string, onError func(error)) *configSaver {
+	s := &configSaver{
+		path:    path,
+		onError: onError,
+		pending: make(chan []byte, 1),
+		done:    make(chan struct{}),
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	go s.run()
+	return s
+}
+
+func (s *configSaver) run() {
+	defer close(s.done)
+	for data := range s.pending {
+		if err := writeFileAtomic(s.path, data); err != nil {
+			s.onError(err)
+		}
+	}
+}
+
+// Save queues cfg to be written. It marshals cfg before returning, so the
+// caller may keep modifying it. Only one goroutine may call Save.
+func (s *configSaver) Save(cfg *UIConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling UI config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// Replace a save that has not started yet.
+	select {
+	case <-s.pending:
+	default:
+	}
+	s.pending <- data
+	return nil
+}
+
+// Close writes any queued save and stops the saver.
+func (s *configSaver) Close() {
+	close(s.pending)
+	<-s.done
+}
+
+// writeFileAtomic replaces path with data by writing a temporary file in the
+// same directory and renaming it, so a crash never leaves a partial file.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("writing UI config: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()           // the write error is the one to report
+		_ = os.Remove(f.Name()) // best effort cleanup of the partial file
+		return fmt.Errorf("writing UI config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name()) // best effort cleanup of the partial file
+		return fmt.Errorf("writing UI config: %w", err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		_ = os.Remove(f.Name()) // best effort cleanup
 		return fmt.Errorf("writing UI config: %w", err)
 	}
 	return nil
