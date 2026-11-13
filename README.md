@@ -26,35 +26,49 @@ Library
 -------
 
 ```go
-port, err := rfx.OpenSerial("/dev/ttyUSB0", rfx.DefaultBaudRate)
+dev, err := rfx.Open(ctx, "/dev/ttyUSB0") // ctx bounds the wait for the device to answer
 if err != nil {
 	return err
 }
-rfe, err := rfx.New(ctx, port) // ctx bounds the wait for the device to answer
-if err != nil {
-	return err
-}
-defer rfe.Close()
+defer dev.Close()
 
-cfg, err := rfe.SetAnalyzerConfig(ctx, 2400000, 2500000, 0, -120, 0) // kHz, dBm
+info := dev.Info()
+fmt.Println(info.Main, info.Expansion, info.Firmware)
+
+sub := dev.Subscribe(rfx.SubscribeOptions{Kinds: rfx.KindSweep})
+defer sub.Close()
+
+cfg, err := dev.SetSweep(ctx, rfx.SweepRequest{
+	Start:     2400 * rfx.MHz,
+	Stop:      2500 * rfx.MHz,
+	AmpTop:    0,
+	AmpBottom: -120,
+})
 if err != nil {
 	return err
 }
-for pkt := range rfe.Chan() {
-	if sweep, ok := pkt.(*rfx.SweepDataPacket); ok {
-		// sweep.Samples[i] is the level in dBm at cfg.StartFreqKHZ*1000 + i*cfg.FreqStepHZ
-	}
+fmt.Println("sweeping", cfg.Start, "to", cfg.Stop())
+
+for msg := range sub.C() {
+	sweep := msg.(*rfx.Sweep)
+	i, level := sweep.Peak()
+	fmt.Printf("peak %.1f dBm at %s\n", level, sweep.FrequencyAt(i))
 }
-return rfe.Err() // nil if the channel closed because of Close
+return dev.Err() // nil if the subscription ended because of Close
 ```
 
-Package `rfxtest` provides an in-memory fake device for testing code that uses
-the library without hardware.
+- Commands take a context and return the configuration the device reports.
+  A wait that runs out returns an error matching `rfx.ErrTimeout`.
+- Each subscription is buffered independently. A slow subscriber loses its
+  oldest sweeps, never device state, and never delays the device.
+- Frequencies are `rfx.Frequency` values in hertz. Levels are in dBm.
+- Package `rfxtest` provides an in-memory fake device for testing code that
+  uses the library without hardware.
 
-Development
------------
+Supported hardware
+------------------
 
-```bash
-go test ./...
-golangci-lint run ./...
-```
+Developed against a 6G unit with a WSUB3G expansion board on firmware 1.34.
+Other spectrum analyzer models use the same protocol but are untested;
+high-resolution sweeps (`$s` and `$z` frames) in particular have not been
+verified on hardware. Signal generator and sniffer modes are not supported.

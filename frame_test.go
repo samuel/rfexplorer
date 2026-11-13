@@ -204,18 +204,18 @@ func TestFramerOverlongLine(t *testing.T) {
 func TestCaptures(t *testing.T) {
 	for _, c := range []struct {
 		file string
-		want map[string]int
+		want map[Kind]int
 	}{
-		{"6g-wsub3g-fw1.34-startup.bin", map[string]int{
-			"CalibrationAvailability": 1, "CalibrationData": 1, "CurrentConfig": 1, "CurrentSetup": 1,
-			"EndOfPresets": 1, "Preset": 12, "SerialNumber": 2, "SweepData": 13, "UnhandledPacket": 4,
+		{"6g-wsub3g-fw1.34-startup.bin", map[Kind]int{
+			KindCalibrationAvailability: 1, KindCalibration: 1, KindConfig: 1, KindDeviceInfo: 1,
+			KindPresetsEnd: 1, KindPreset: 12, KindSerialNumber: 2, KindSweep: 13, KindUnhandled: 4,
 		}},
-		{"6g-wsub3g-fw1.34-screen.bin", map[string]int{
-			"ScreenImage": 2, "SweepData": 3, "UnhandledPacket": 1,
+		{"6g-wsub3g-fw1.34-screen.bin", map[Kind]int{
+			KindScreen: 2, KindSweep: 3, KindUnhandled: 1,
 		}},
-		{"6g-wsub3g-fw1.34-config.bin", map[string]int{
-			"CalibrationAvailability": 3, "CurrentCalculatorMode": 2, "CurrentConfig": 3, "CurrentSetup": 3,
-			"SerialNumber": 3, "SweepData": 27, "UnhandledPacket": 10,
+		{"6g-wsub3g-fw1.34-config.bin", map[Kind]int{
+			KindCalibrationAvailability: 3, KindCalculator: 2, KindConfig: 3, KindDeviceInfo: 3,
+			KindSerialNumber: 3, KindSweep: 27, KindUnhandled: 10,
 		}},
 	} {
 		t.Run(c.file, func(t *testing.T) {
@@ -225,20 +225,20 @@ func TestCaptures(t *testing.T) {
 			}
 			var f framer
 			f.Write(data)
-			got := make(map[string]int)
+			got := make(map[Kind]int)
 			for _, frame := range drain(&f) {
 				pkt, err := decode(frame)
 				if err != nil {
 					t.Errorf("decode %.40q: %s", frame, err)
 					continue
 				}
-				got[pkt.Type()]++
+				got[pkt.Kind()]++
 				switch pkt := pkt.(type) {
-				case *SweepDataPacket:
+				case *Sweep:
 					if len(pkt.Samples) != 112 {
 						t.Errorf("sweep has %d samples, want 112", len(pkt.Samples))
 					}
-				case *UnhandledPacket:
+				case *Unhandled:
 					t.Logf("unhandled: %.60q", pkt.Data)
 				}
 			}

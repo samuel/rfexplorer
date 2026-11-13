@@ -13,8 +13,8 @@ import (
 	"samuelks.com/rfx"
 )
 
-// connectTimeout bounds the wait for the device to answer on startup.
-const connectTimeout = 5 * time.Second
+// connectTimeout bounds connecting to and configuring the device on startup.
+const connectTimeout = 10 * time.Second
 
 // defaultDevice returns the serial device from RFX_DEVICE, falling back to
 // the usual macOS name of the CP210x USB bridge.
@@ -30,34 +30,24 @@ func main() {
 	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "Serial baud rate")
 	flag.Parse()
 
-	port, err := rfx.OpenSerial(*flagDevice, rfx.BaudRate(*flagBaud))
-	if err != nil {
-		log.Fatal(err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	rfe, err := rfx.New(ctx, port)
-	cancel()
+	defer cancel()
+	rfe, err := rfx.Open(ctx, *flagDevice, rfx.WithBaudRate(rfx.BaudRate(*flagBaud)))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer rfe.Close() //nolint:errcheck // exiting, nothing to do with the error
 
-	if err := rfe.SetLCDEnabled(true); err != nil {
+	if err := rfe.SetLCD(ctx, true); err != nil {
 		log.Fatal(err)
 	}
-	if err := rfe.SetScreenDumpEnabled(false); err != nil {
+	if err := rfe.SetScreenDump(ctx, false); err != nil {
 		log.Fatal(err)
 	}
-	if err := rfe.SetMaxHold(); err != nil {
+	if err := rfe.SetCalculator(ctx, rfx.CalculatorMaxHold); err != nil {
 		log.Fatal(err)
 	}
-	if err := rfe.SwitchModuleExp(); err != nil {
-		log.Fatal(err)
-	}
-	if err := rfe.RequestConfig(); err != nil {
-		log.Fatal(err)
-	}
-	if err := rfe.RequestPresets(); err != nil {
+	if _, err := rfe.SelectModule(ctx, rfx.ModuleExpansion); err != nil {
 		log.Fatal(err)
 	}
 

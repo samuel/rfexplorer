@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"image"
 	"image/color"
 	"log"
@@ -31,13 +30,14 @@ import (
 // widgets room to breathe.
 var defaultMargin = unit.Dp(10)
 
-// firstUnusedPresetIndex returns the lowest index not already used by any preset.
-func firstUnusedPresetIndex(presets []*rfx.Preset) int {
+// firstUnusedPresetIndex returns the lowest of the device's slots not already
+// used by any preset.
+func firstUnusedPresetIndex(presets []rfx.Preset, slots int) int {
 	used := make(map[int]bool, len(presets))
 	for _, p := range presets {
 		used[p.Index] = true
 	}
-	for i := range 100 {
+	for i := range slots {
 		if !used[i] {
 			return i
 		}
@@ -80,15 +80,14 @@ type UI struct {
 	// WifiSpectrum *WifiSpectrumWidget
 
 	mu                   sync.RWMutex
-	rfe                  *rfx.RFExplorer
+	rfe                  *rfx.Device
 	centerFrequencyInput *widget.Editor
 	frequencySpanInput   *widget.Editor
-	receivingPreset      bool
-	receivedPresets      []*rfx.Preset
-	presets              []*rfx.Preset
+	presets              []rfx.Preset
+	maxPresets           int
 	presetList           *widget.List
 	presetClicks         []gesture.Click
-	rfeConfig            rfx.CurrentConfigPacket
+	rfeConfig            rfx.SweepConfig
 	lcdEnabled           bool
 	lcdSwitch            *widget.Bool
 	expModuleActive      bool
@@ -101,7 +100,7 @@ type UI struct {
 	leftBg, leftFg       color.NRGBA
 }
 
-func NewUI(rfe *rfx.RFExplorer) *UI {
+func NewUI(rfe *rfx.Device) *UI {
 	theme := material.NewTheme() // gofont.Collection())
 	theme.Palette = material.Palette{
 		Fg:         color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff},
@@ -140,6 +139,7 @@ func NewUI(rfe *rfx.RFExplorer) *UI {
 		Theme: theme,
 
 		rfe:                  rfe,
+		maxPresets:           rfe.Info().MaxPresets(),
 		lcdEnabled:           true,
 		lcdSwitch:            &widget.Bool{Value: true},
 		expModuleSwitch:      &widget.Bool{},
@@ -189,43 +189,92 @@ func (ui *UI) saveUIConfig() {
 	}()
 }
 
-func (ui *UI) setRFEConfig(cfg rfx.CurrentConfigPacket) {
+func (ui *UI) setRFEConfig(cfg rfx.SweepConfig) {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
+	startKHz, stepHz := int(cfg.Start/rfx.KHz), int(cfg.Step)
 	ui.rfeConfig = cfg
-	ui.expModuleActive = cfg.ExpModuleActive
-	ui.expModuleSwitch.Value = cfg.ExpModuleActive
-	ui.Spectrum.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
-	ui.Spectrum.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
-	ui.ChannelOverview.SetFreqConfig(cfg.StartFreqKHZ, cfg.FreqStepHZ)
-	ui.ChannelOverview.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
-	ui.Waterfall.w.SetAmplitude(cfg.AmpBottomDBM, cfg.AmpTopDBM)
-	centerFreqMHZ := float64(1000*cfg.StartFreqKHZ+cfg.FreqStepHZ*(cfg.SweepSteps-1)/2) / 1e6
-	ui.centerFrequencyInput.SetText(strconv.FormatFloat(centerFreqMHZ+0.0004, 'f', 3, 64))
-	freqSpanMHZ := float64((cfg.SweepSteps-1)*cfg.FreqStepHZ) / 1e6
-	ui.frequencySpanInput.SetText(strconv.FormatFloat(freqSpanMHZ+0.0004, 'f', 3, 64))
+	ui.expModuleActive = cfg.ExpansionActive
+	ui.expModuleSwitch.Value = cfg.ExpansionActive
+	ui.Spectrum.SetFreqConfig(startKHz, stepHz)
+	ui.Spectrum.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
+	ui.ChannelOverview.SetFreqConfig(startKHz, stepHz)
+	ui.ChannelOverview.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
+	ui.Waterfall.w.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
+	ui.centerFrequencyInput.SetText(formatMHz(cfg.Center()))
+	ui.frequencySpanInput.SetText(formatMHz(cfg.Span()))
 	ui.Spectrum.Reset()
-	// ui.WifiSpectrum.Reset()
 }
 
-func (ui *UI) setPresets(presets []*rfx.Preset) {
+// formatMHz formats a frequency in MHz to the nearest kHz.
+func formatMHz(f rfx.Frequency) string {
+	return strconv.FormatFloat(f.MHz(), 'f', 3, 64)
+}
+
+// parseMHz parses a frequency entered in MHz.
+func parseMHz(s string) (rfx.Frequency, error) {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	return rfx.Frequency(math.Round(v * float64(rfx.MHz))), nil
+}
+
+// setPresets replaces the preset list with the used slots of presets.
+func (ui *UI) setPresets(presets []rfx.Preset) {
+	used := make([]rfx.Preset, 0, len(presets))
+	for _, p := range presets {
+		if p.Name != "" {
+			used = append(used, p)
+		}
+	}
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
-	ui.presets = presets
-	ui.presetClicks = make([]gesture.Click, len(presets))
+	ui.presets = used
+	ui.presetClicks = make([]gesture.Click, len(used))
 	if ui.presetEditor.CloseOnRefresh {
 		ui.presetEditor.CloseOnRefresh = false
 		ui.presetEditor.Active = false
 	}
 }
 
-// setAnalyzerConfig changes the frequency and amplitude range, waiting
-// briefly for the device to confirm.
-func (ui *UI) setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBM, ampBottomDBM int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+// refreshPresets reads the presets from the device and redraws.
+func (ui *UI) refreshPresets(w *app.Window) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := ui.rfe.SetAnalyzerConfig(ctx, startFreqKHZ, endFreqKHZ, ampTopDBM, ampBottomDBM, 0)
+	presets, err := ui.rfe.Presets(ctx)
+	if err != nil {
+		log.Printf("Failed to read presets: %s", err)
+		return
+	}
+	ui.setPresets(presets)
+	w.Invalidate()
+}
+
+// command runs a device command with a timeout, logging failures. Switching
+// modules alone can take the device a few seconds.
+func (ui *UI) command(name string, f func(ctx context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := f(ctx); err != nil {
+		log.Printf("Failed to %s: %s", name, err)
+	}
+}
+
+// setSweep changes the frequency and amplitude range, waiting briefly for
+// the device to confirm.
+func (ui *UI) setSweep(ctx context.Context, start, stop rfx.Frequency, ampTop, ampBottom int) error {
+	_, err := ui.rfe.SetSweep(ctx, rfx.SweepRequest{Start: start, Stop: stop, AmpTop: ampTop, AmpBottom: ampBottom})
+	return err
+}
+
+func (ui *UI) selectModule(ctx context.Context, mainboard bool) error {
+	m := rfx.ModuleExpansion
+	if mainboard {
+		m = rfx.ModuleMain
+	}
+	_, err := ui.rfe.SelectModule(ctx, m)
 	return err
 }
 
@@ -235,52 +284,39 @@ func (ui *UI) Run(w *app.Window) error {
 	stopCh := make(chan any)
 	defer close(stopCh)
 
+	sub := ui.rfe.Subscribe(rfx.SubscribeOptions{Kinds: rfx.KindSweep | rfx.KindConfig})
+	defer sub.Close()
+	ui.setRFEConfig(ui.rfe.Config())
+	go ui.refreshPresets(w)
+
 	go func() {
+		var samples []float64
 		for {
-			var pkt rfx.Packet
+			var msg rfx.Message
 			select {
-			case p, ok := <-ui.rfe.Chan():
+			case m, ok := <-sub.C():
 				if !ok {
-					log.Printf("Connection lost: %v", ui.rfe.Err())
+					if err := ui.rfe.Err(); err != nil {
+						log.Printf("Connection lost: %s", err)
+					}
 					return
 				}
-				pkt = p
+				msg = m
 			case <-stopCh:
 				return
 			}
 			// TODO: make everything here concurrent safe
-			switch pkt := pkt.(type) {
-			case *rfx.SweepDataPacket:
-				ui.Waterfall.w.Update(pkt.Samples)
-				ui.Spectrum.Update(pkt.Samples)
-				ui.ChannelOverview.Update(pkt.Samples)
-				// ui.WifiSpectrum.Update(pkt.Samples)
-			case *rfx.CurrentConfigPacket:
-				ui.setRFEConfig(*pkt)
-				fmt.Printf("%+#v\n", pkt)
-			case *rfx.Preset:
-				if !ui.receivingPreset {
-					ui.receivingPreset = true
-					ui.receivedPresets = nil
-					ui.setPresets(nil)
+			switch msg := msg.(type) {
+			case *rfx.Sweep:
+				samples = samples[:0]
+				for _, v := range msg.Samples {
+					samples = append(samples, float64(v))
 				}
-				ui.receivedPresets = append(ui.receivedPresets, pkt)
-				// ui.presetClicks = make([]gesture.Click, len(ui.presets))
-			case *rfx.EndOfPresetsPacket:
-				filtered := ui.receivedPresets[:0]
-				for _, p := range ui.receivedPresets {
-					if p.Name != "" {
-						filtered = append(filtered, p)
-					}
-				}
-				ui.setPresets(filtered)
-				ui.receivingPreset = false
-				ui.receivedPresets = nil
-				w.Invalidate()
-			case *rfx.UnhandledPacket:
-				fmt.Printf("Unhandled packet: %q\n", pkt.Data)
-			default:
-				fmt.Printf("%T\n", pkt)
+				ui.Waterfall.w.Update(samples)
+				ui.Spectrum.Update(samples)
+				ui.ChannelOverview.Update(samples)
+			case *rfx.SweepConfig:
+				ui.setRFEConfig(*msg)
 			}
 		}
 	}()
@@ -303,21 +339,11 @@ func (ui *UI) Run(w *app.Window) error {
 
 			if ui.lcdSwitch.Value != ui.lcdEnabled {
 				ui.lcdEnabled = ui.lcdSwitch.Value
-				if err := ui.rfe.SetLCDEnabled(ui.lcdEnabled); err != nil {
-					log.Printf("Failed to set LCD enabled: %s", err)
-				}
+				ui.command("set LCD", func(ctx context.Context) error { return ui.rfe.SetLCD(ctx, ui.lcdEnabled) })
 			}
 			if ui.expModuleSwitch.Value != ui.expModuleActive {
 				ui.expModuleActive = ui.expModuleSwitch.Value
-				var err error
-				if ui.expModuleActive {
-					err = ui.rfe.SwitchModuleExp()
-				} else {
-					err = ui.rfe.SwitchModuleMain()
-				}
-				if err != nil {
-					log.Printf("Failed to switch module: %s", err)
-				}
+				ui.command("switch module", func(ctx context.Context) error { return ui.selectModule(ctx, !ui.expModuleActive) })
 			}
 
 			pe := ui.presetEditor
@@ -330,18 +356,12 @@ func (ui *UI) Run(w *app.Window) error {
 			if pe.PendingApply {
 				pe.PendingApply = false
 				p := pe.ToPreset()
-				if p.Mainboard {
-					if err := ui.rfe.SwitchModuleMain(); err != nil {
-						log.Printf("Failed to switch to main module: %s", err)
+				ui.command("apply preset", func(ctx context.Context) error {
+					if err := ui.selectModule(ctx, p.Mainboard); err != nil {
+						return err
 					}
-				} else {
-					if err := ui.rfe.SwitchModuleExp(); err != nil {
-						log.Printf("Failed to switch to expansion module: %s", err)
-					}
-				}
-				if err := ui.setAnalyzerConfig(p.MinFreqKHz, p.MaxFreqKHz, p.AmpTopDBm, p.AmpBottomDBm); err != nil {
-					log.Printf("Failed to apply preset: %s", err)
-				}
+					return ui.setSweep(ctx, p.Start, p.Stop, p.AmpTop, p.AmpBottom)
+				})
 				bandSetName := pe.SelectedBandSetName()
 				ui.uiConfig.SetBandSetFor(p.Index, bandSetName)
 				bs := ui.bandSetByName(bandSetName)
@@ -361,16 +381,14 @@ func (ui *UI) Run(w *app.Window) error {
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					if err := ui.rfe.UpdatePreset(ctx, &p); err != nil {
+					if err := ui.rfe.WritePreset(ctx, p); err != nil {
 						log.Printf("Failed to save preset: %s", err)
 						return
 					}
 					ui.mu.Lock()
 					pe.CloseOnRefresh = true
 					ui.mu.Unlock()
-					if err := ui.rfe.RequestPresets(); err != nil {
-						log.Printf("Failed to request presets: %s", err)
-					}
+					ui.refreshPresets(w)
 				}()
 			}
 			if pe.PendingDelete {
@@ -388,9 +406,7 @@ func (ui *UI) Run(w *app.Window) error {
 					ui.mu.Lock()
 					pe.CloseOnRefresh = true
 					ui.mu.Unlock()
-					if err := ui.rfe.RequestPresets(); err != nil {
-						log.Printf("Failed to request presets: %s", err)
-					}
+					ui.refreshPresets(w)
 				}()
 			}
 		case key.Event:
@@ -426,14 +442,11 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 			break
 		}
 		if e, ok := e.(widget.SubmitEvent); ok {
-			centerFreqMHZ, err := strconv.ParseFloat(e.Text, 64)
-			if err == nil {
-				freqSpanMHZ := float64(ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1)) / 1e6
-				startFreqKHZ := int((centerFreqMHZ - freqSpanMHZ/2) * 1000)
-				endFreqKHZ := int((centerFreqMHZ + freqSpanMHZ/2) * 1000)
-				if err := ui.setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM); err != nil {
-					log.Printf("Failed to set analyzer config: %s", err)
-				}
+			if center, err := parseMHz(e.Text); err == nil {
+				span := ui.rfeConfig.Span()
+				ui.command("set center frequency", func(ctx context.Context) error {
+					return ui.setSweep(ctx, center-span/2, center+span/2, ui.rfeConfig.AmpTop, ui.rfeConfig.AmpBottom)
+				})
 			}
 		}
 	}
@@ -443,15 +456,11 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 			break
 		}
 		if e, ok := e.(widget.SubmitEvent); ok {
-			freqSpanMHZ, err := strconv.ParseFloat(e.Text, 64)
-			if err == nil {
-				centerFreqMHZ := (float64(1000*ui.rfeConfig.StartFreqKHZ) + float64(ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1))/2) / 1e6
-				startFreqKHZ := int(math.Round((centerFreqMHZ - freqSpanMHZ/2) * 1000))
-				endFreqKHZ := int(math.Round((centerFreqMHZ + freqSpanMHZ/2) * 1000))
-				fmt.Println(startFreqKHZ, endFreqKHZ, centerFreqMHZ)
-				if err := ui.setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM); err != nil {
-					log.Printf("Failed to set analyzer config: %s", err)
-				}
+			if span, err := parseMHz(e.Text); err == nil {
+				center := ui.rfeConfig.Center()
+				ui.command("set frequency span", func(ctx context.Context) error {
+					return ui.setSweep(ctx, center-span/2, center+span/2, ui.rfeConfig.AmpTop, ui.rfeConfig.AmpBottom)
+				})
 			}
 		}
 	}
@@ -463,7 +472,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				break
 			}
 			if e.Kind == gesture.KindClick {
-				p := ui.presets[i]
+				p := &ui.presets[i]
 				ui.presetEditor.OpenPreset(p, ui.uiConfig.BandSetFor(p.Index))
 			}
 		}
@@ -487,23 +496,18 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							freq := strconv.FormatFloat(float64(ui.rfeConfig.StartFreqKHZ)/1000.0+0.0004, 'f', 3, 64)
-							l := material.Body1(ui.Theme, freq)
+							l := material.Body1(ui.Theme, formatMHz(ui.rfeConfig.Start))
 							l.Color = ui.leftFg
 							return l.Layout(gtx)
 						}),
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							endFreqHz := 1000*ui.rfeConfig.StartFreqKHZ + ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1)/2
-							freq := strconv.FormatFloat(float64(endFreqHz)/1000000.0+0.0004, 'f', 3, 64)
-							l := material.Body1(ui.Theme, freq)
+							l := material.Body1(ui.Theme, formatMHz(ui.rfeConfig.Center()))
 							l.Color = ui.leftFg
 							l.Alignment = text.Middle
 							return l.Layout(gtx)
 						}),
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							endFreqHz := 1000*ui.rfeConfig.StartFreqKHZ + ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1)
-							freq := strconv.FormatFloat(float64(endFreqHz)/1000000.0+0.0004, 'f', 3, 64)
-							l := material.Body1(ui.Theme, freq)
+							l := material.Body1(ui.Theme, formatMHz(ui.rfeConfig.Stop()))
 							l.Color = ui.leftFg
 							l.Alignment = text.End
 							return l.Layout(gtx)
@@ -584,7 +588,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 							layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 								if ui.addPresetBtn.Clicked(gtx) {
-									ui.presetEditor.OpenNew(firstUnusedPresetIndex(ui.presets), "")
+									ui.presetEditor.OpenNew(firstUnusedPresetIndex(ui.presets, ui.maxPresets), "")
 								}
 								return material.Button(th, &ui.addPresetBtn, "Add Preset").Layout(gtx)
 							}),

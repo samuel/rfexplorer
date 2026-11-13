@@ -17,30 +17,30 @@ const presetFrameLen = 33
 
 var errFrameLength = errors.New("frame length does not match its header")
 
-// decode converts a frame, as produced by framer, into a packet. Frames that
-// are not recognized are returned as UnhandledPacket. An error is returned
-// for a recognized frame that is malformed.
-func decode(b []byte) (Packet, error) {
-	var pkt Packet
+// decode converts a frame, as produced by framer, into a message. Frames
+// that are not recognized are returned as Unhandled. An error is returned for
+// a recognized frame that is malformed.
+func decode(b []byte) (Message, error) {
+	var msg Message
 	var err error
 	if len(b) >= 2 {
 		switch b[0] {
 		case '$':
-			pkt, err = decodeBinary(b)
+			msg, err = decodeBinary(b)
 		case '#':
-			pkt, err = decodeText(b)
+			msg, err = decodeText(b)
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("rfx: invalid %q frame: %w", b[:2], err)
+		return nil, err
 	}
-	if pkt == nil {
-		pkt = &UnhandledPacket{Data: bytes.Clone(b)}
+	if msg == nil {
+		msg = &Unhandled{Data: bytes.Clone(b)}
 	}
-	return pkt, nil
+	return msg, nil
 }
 
-func decodeBinary(b []byte) (Packet, error) {
+func decodeBinary(b []byte) (Message, error) {
 	n, isBinary, ok := binaryFrameLen(b)
 	if !isBinary {
 		return nil, nil
@@ -59,9 +59,9 @@ func decodeBinary(b []byte) (Packet, error) {
 		// Raw data (used for sniffer)
 		return &RawData{Data: bytes.Clone(b[4:])}, nil
 	case 'q':
-		return &CalibrationDataPacket{Data: bytes.Clone(b[3:])}, nil
+		return &Calibration{Data: bytes.Clone(b[3:])}, nil
 	case 'Q':
-		return &CalibrationDataPacket{Data: bytes.Clone(b[4:])}, nil
+		return &Calibration{Data: bytes.Clone(b[4:])}, nil
 	case 'P':
 		return decodePreset(b)
 	}
@@ -70,15 +70,15 @@ func decodeBinary(b []byte) (Packet, error) {
 
 // decodeSweep converts sweep samples to dBm. Each sample is an unsigned byte
 // holding the amplitude in units of -0.5 dBm, so 0x11 is -8.5 dBm.
-func decodeSweep(b []byte) *SweepDataPacket {
-	samples := make([]float64, len(b))
+func decodeSweep(b []byte) *Sweep {
+	samples := make([]float32, len(b))
 	for i, v := range b {
-		samples[i] = -float64(v) / 2.0
+		samples[i] = -float32(v) / 2
 	}
-	return &SweepDataPacket{Samples: samples}
+	return &Sweep{Samples: samples}
 }
 
-func decodePreset(b []byte) (Packet, error) {
+func decodePreset(b []byte) (Message, error) {
 	if len(b) < presetFrameLen {
 		return nil, errFrameLength
 	}
@@ -87,54 +87,54 @@ func decodePreset(b []byte) (Packet, error) {
 		name = name[:i]
 	}
 	return &Preset{
-		Index:          int(b[3]),
-		Name:           string(name),
-		MinFreqKHz:     int(binary.LittleEndian.Uint32(b[19:23])),
-		MaxFreqKHz:     int(binary.LittleEndian.Uint32(b[23:27])),
-		CalcMode:       CalculatorMode(b[27]),
-		AmpTopDBm:      int(int8(b[28])),
-		AmpBottomDBm:   int(int8(b[29])),
-		CalcIterations: int(b[30]),
-		Mainboard:      b[31] != 0,
-		MarkerMode:     MarkerMode(b[32]),
+		Index:      int(b[3]),
+		Name:       string(name),
+		Start:      Frequency(binary.LittleEndian.Uint32(b[19:23])) * KHz,
+		Stop:       Frequency(binary.LittleEndian.Uint32(b[23:27])) * KHz,
+		Calculator: CalculatorMode(b[27]),
+		AmpTop:     int(int8(b[28])),
+		AmpBottom:  int(int8(b[29])),
+		Iterations: int(b[30]),
+		Mainboard:  b[31] != 0,
+		Marker:     MarkerMode(b[32]),
 	}, nil
 }
 
-func decodeText(b []byte) (Packet, error) {
+func decodeText(b []byte) (Message, error) {
 	s := string(b)
 	switch {
 	case len(s) == 4 && strings.HasPrefix(s, "#C+"):
 		// #C+<mode:byte> - calculator mode
-		return &CurrentCalculatorMode{Mode: CalculatorMode(s[3])}, nil
+		return &CalculatorChange{Mode: CalculatorMode(s[3])}, nil
 	case strings.HasPrefix(s, "#C2-F:"):
 		// #C2-F:<Start_Freq>,<Freq_Step>,<Amp_Top>,<Amp_Bottom>,<Sweep_Steps>,
 		//       <ExpModuleActive>,<CurrentMode>,<Min_Freq>,<Max_Freq>,<Max_Span>,
 		//       <RBW>,<AmpOffset>,<CalculatorMode>
 		// Firmware before v1.12 sends fewer fields.
 		f := newFields(s[6:])
-		pkt := &CurrentConfigPacket{
-			StartFreqKHZ:    f.int(0),
-			FreqStepHZ:      f.int(1),
-			AmpTopDBM:       f.int(2),
-			AmpBottomDBM:    f.int(3),
-			SweepSteps:      f.int(4),
-			ExpModuleActive: f.str(5) == "1",
-			CurrentMode:     Mode(f.int(6)),
-			MinFreqKHZ:      f.int(7),
-			MaxFreqKHZ:      f.int(8),
-			MaxSpan:         f.int(9),
-			RBWKHZ:          f.int(10),
+		pkt := &SweepConfig{
+			Start:           f.freq(0, KHz),
+			Step:            f.freq(1, Hz),
+			AmpTop:          f.int(2),
+			AmpBottom:       f.int(3),
+			Points:          f.int(4),
+			ExpansionActive: f.str(5) == "1",
+			Mode:            Mode(f.int(6)),
+			MinFreq:         f.freq(7, KHz),
+			MaxFreq:         f.freq(8, KHz),
+			MaxSpan:         f.freq(9, KHz),
+			RBW:             f.freq(10, KHz),
 			AmpOffset:       f.int(11),
-			CalculatorMode:  CalculatorMode(f.int(12)),
+			Calculator:      CalculatorMode(f.int(12)),
 		}
 		return pkt, f.err
 	case strings.HasPrefix(s, "#C2-M:"):
 		// #C2-M:<Main_Model>,<Expansion_Model>,<Firmware_Version>
 		f := newFields(s[6:])
-		pkt := &CurrentSetupPacket{
-			Model:           f.model(0),
-			ExpansionModel:  f.model(1),
-			FirmwareVersion: strings.TrimLeft(f.str(2), "0"),
+		pkt := &DeviceInfo{
+			Main:      f.model(0),
+			Expansion: f.model(1),
+			Firmware:  strings.TrimLeft(f.str(2), "0"),
 		}
 		return pkt, f.err
 	case strings.HasPrefix(s, "#C4-F:"):
@@ -143,14 +143,14 @@ func decodeText(b []byte) (Packet, error) {
 		// The sniffer baud rate is 16 MHz / Delay. Threshold is in units of
 		// -0.5 dBm.
 		f := newFields(s[6:])
-		pkt := &CurrentSnifferConfig{
-			StartFreqKHZ:    f.int(0),
-			ExpModuleActive: f.str(1) == "1",
-			CurrentMode:     Mode(f.int(2)),
+		pkt := &SnifferConfig{
+			Start:           f.freq(0, KHz),
+			ExpansionActive: f.str(1) == "1",
+			Mode:            Mode(f.int(2)),
 			Delay:           f.int(3),
 			Modulation:      Modulation(f.int(4)),
-			RBWKHZ:          f.int(5),
-			ThresholdDBM:    -0.5 * float64(f.int(6)),
+			RBW:             f.freq(5, KHz),
+			ThresholdDBm:    -0.5 * float64(f.int(6)),
 		}
 		return pkt, f.err
 	case strings.HasPrefix(s, "#CAL:"):
@@ -158,14 +158,14 @@ func decodeText(b []byte) (Packet, error) {
 		if len(s) < 7 {
 			return nil, errFrameLength
 		}
-		return &CalibrationAvailabilityPacket{
-			MainboardInternalCalibrationAvailable:      s[5] == '1',
-			ExpansionBoardInternalCalibrationAvailable: s[6] == '1',
+		return &CalibrationAvailability{
+			Mainboard: s[5] == '1',
+			Expansion: s[6] == '1',
 		}, nil
 	case strings.HasPrefix(s, "#Sn"):
-		return &SerialNumberPacket{SN: s[3:]}, nil
+		return &SerialNumber{Serial: s[3:]}, nil
 	case strings.HasPrefix(s, "#PCK"):
-		return &EndOfPresetsPacket{}, nil
+		return &PresetsEnd{}, nil
 	}
 	return nil, nil
 }
@@ -198,6 +198,11 @@ func (f *fields) int(i int) int {
 		f.err = fmt.Errorf("field %d: %w", i, err)
 	}
 	return v
+}
+
+// freq parses a frequency given in multiples of unit.
+func (f *fields) freq(i int, unit Frequency) Frequency {
+	return Frequency(f.int(i)) * unit
 }
 
 // model parses a model code. A missing field means no board is present.

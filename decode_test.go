@@ -11,55 +11,55 @@ func TestDecode(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		frame []byte
-		want  Packet
+		want  Message
 	}{
-		{"sweep", cat("$S", 3, 0x00, 0x11, 0xf0), &SweepDataPacket{Samples: []float64{0, -8.5, -120}}},
-		{"sweep ext", cat("$s", 1, bytes.Repeat([]byte{0x64}, 16)), &SweepDataPacket{Samples: repeatFloat(-50, 16)}},
-		{"sweep ext 4096", cat("$s", 0, bytes.Repeat([]byte{0x02}, 4096)), &SweepDataPacket{Samples: repeatFloat(-1, 4096)}},
-		{"sweep large", cat("$z", 0x01, 0x2c, bytes.Repeat([]byte{0xc8}, 300)), &SweepDataPacket{Samples: repeatFloat(-100, 300)}},
-		{"sweep empty", cat("$S", 0), &SweepDataPacket{Samples: []float64{}}},
+		{"sweep", cat("$S", 3, 0x00, 0x11, 0xf0), &Sweep{Samples: []float32{0, -8.5, -120}}},
+		{"sweep ext", cat("$s", 1, bytes.Repeat([]byte{0x64}, 16)), &Sweep{Samples: repeatFloat(-50, 16)}},
+		{"sweep ext 4096", cat("$s", 0, bytes.Repeat([]byte{0x02}, 4096)), &Sweep{Samples: repeatFloat(-1, 4096)}},
+		{"sweep large", cat("$z", 0x01, 0x2c, bytes.Repeat([]byte{0xc8}, 300)), &Sweep{Samples: repeatFloat(-100, 300)}},
+		{"sweep empty", cat("$S", 0), &Sweep{Samples: []float32{}}},
 		{"screen", cat("$D", screen), &ScreenImage{Data: screen}},
 		{"raw", cat("$R", 3, 0, "abc"), &RawData{Data: []byte("abc")}},
-		{"calibration", cat("$q", 3, 0x02, 0xfe, 0x00), &CalibrationDataPacket{Data: []byte{0x02, 0xfe, 0x00}}},
-		{"calibration large", cat("$Q", 3, 0, 0x02, 0xfe, 0x00), &CalibrationDataPacket{Data: []byte{0x02, 0xfe, 0x00}}},
+		{"calibration", cat("$q", 3, 0x02, 0xfe, 0x00), &Calibration{Data: []byte{0x02, 0xfe, 0x00}}},
+		{"calibration large", cat("$Q", 3, 0, 0x02, 0xfe, 0x00), &Calibration{Data: []byte{0x02, 0xfe, 0x00}}},
 		{"preset", presetFrame, &Preset{
-			Index: 0, Name: "RC Remote", MinFreqKHz: 27000, MaxFreqKHz: 28000, AmpTopDBm: -20, AmpBottomDBm: -120,
-			CalcMode: CalculatorModeNormal, CalcIterations: 10, Mainboard: false, MarkerMode: MarkerModeNone,
+			Index: 0, Name: "RC Remote", Start: 27 * MHz, Stop: 28 * MHz, AmpTop: -20, AmpBottom: -120,
+			Calculator: CalculatorNormal, Iterations: 10, Mainboard: false, Marker: MarkerNone,
 		}},
-		{"calculator mode", []byte("#C+\x04"), &CurrentCalculatorMode{Mode: CalculatorModeMaxHold}},
-		{"config", []byte("#C2-F:2400000,0855854,0000,-120,0112,1,000,0015000,2700000,0600000,00510,0000,000"), &CurrentConfigPacket{
-			StartFreqKHZ: 2400000, FreqStepHZ: 855854, AmpTopDBM: 0, AmpBottomDBM: -120, SweepSteps: 112,
-			ExpModuleActive: true, CurrentMode: ModeSpectrumAnalyzer, MinFreqKHZ: 15000, MaxFreqKHZ: 2700000,
-			MaxSpan: 600000, RBWKHZ: 510, AmpOffset: 0, CalculatorMode: CalculatorModeNormal,
+		{"calculator mode", []byte("#C+\x04"), &CalculatorChange{Mode: CalculatorMaxHold}},
+		{"config", []byte("#C2-F:2400000,0855854,0000,-120,0112,1,000,0015000,2700000,0600000,00510,0000,000"), &SweepConfig{
+			Start: 2400 * MHz, Step: 855854, AmpTop: 0, AmpBottom: -120, Points: 112,
+			ExpansionActive: true, Mode: ModeSpectrumAnalyzer, MinFreq: 15 * MHz, MaxFreq: 2700 * MHz,
+			MaxSpan: 600 * MHz, RBW: 510 * KHz, AmpOffset: 0, Calculator: CalculatorNormal,
 		}},
-		{"config with spaces", []byte("#C2-F:5350000, 0005357, -020, -100, 0112, 0, 002, 4850000, 6100000, 0600000, 00110, -010, 004"), &CurrentConfigPacket{
-			StartFreqKHZ: 5350000, FreqStepHZ: 5357, AmpTopDBM: -20, AmpBottomDBM: -100, SweepSteps: 112,
-			CurrentMode: ModeWIFIAnalyzer, MinFreqKHZ: 4850000, MaxFreqKHZ: 6100000,
-			MaxSpan: 600000, RBWKHZ: 110, AmpOffset: -10, CalculatorMode: CalculatorModeMaxHold,
+		{"config with spaces", []byte("#C2-F:5350000, 0005357, -020, -100, 0112, 0, 002, 4850000, 6100000, 0600000, 00110, -010, 004"), &SweepConfig{
+			Start: 5350 * MHz, Step: 5357, AmpTop: -20, AmpBottom: -100, Points: 112,
+			Mode: ModeWifiAnalyzer, MinFreq: 4850 * MHz, MaxFreq: 6100 * MHz,
+			MaxSpan: 600 * MHz, RBW: 110 * KHz, AmpOffset: -10, Calculator: CalculatorMaxHold,
 		}},
-		{"config old firmware", []byte("#C2-F:0433000,0001000,-050,-120,0112,0,000"), &CurrentConfigPacket{
-			StartFreqKHZ: 433000, FreqStepHZ: 1000, AmpTopDBM: -50, AmpBottomDBM: -120, SweepSteps: 112,
+		{"config old firmware", []byte("#C2-F:0433000,0001000,-050,-120,0112,0,000"), &SweepConfig{
+			Start: 433 * MHz, Step: 1000, AmpTop: -50, AmpBottom: -120, Points: 112,
 		}},
-		{"config empty", []byte("#C2-F:"), &CurrentConfigPacket{}},
-		{"setup", []byte("#C2-M:006,005,01.34"), &CurrentSetupPacket{Model: Model6G, ExpansionModel: ModelWSUB3G, FirmwareVersion: "1.34"}},
-		{"setup no expansion", []byte("#C2-M:003,255,01.12B26"), &CurrentSetupPacket{Model: ModelWSUB1G, ExpansionModel: ModelNone, FirmwareVersion: "1.12B26"}},
-		{"setup short", []byte("#C2-M:004"), &CurrentSetupPacket{Model: Model24G, ExpansionModel: ModelNone}},
-		{"sniffer config", []byte("#C4-F:0440000,1,006,00266,0,00510,100,"), &CurrentSnifferConfig{
-			StartFreqKHZ: 440000, ExpModuleActive: true, CurrentMode: ModeRFSniffer, Delay: 266,
-			Modulation: ModulationOOKRaw, RBWKHZ: 510, ThresholdDBM: -50,
+		{"config empty", []byte("#C2-F:"), &SweepConfig{}},
+		{"setup", []byte("#C2-M:006,005,01.34"), &DeviceInfo{Main: Model6G, Expansion: ModelWSUB3G, Firmware: "1.34"}},
+		{"setup no expansion", []byte("#C2-M:003,255,01.12B26"), &DeviceInfo{Main: ModelWSUB1G, Expansion: ModelNone, Firmware: "1.12B26"}},
+		{"setup short", []byte("#C2-M:004"), &DeviceInfo{Main: Model24G, Expansion: ModelNone}},
+		{"sniffer config", []byte("#C4-F:0440000,1,006,00266,0,00510,100,"), &SnifferConfig{
+			Start: 440 * MHz, ExpansionActive: true, Mode: ModeRFSniffer, Delay: 266,
+			Modulation: ModulationOOKRaw, RBW: 510 * KHz, ThresholdDBm: -50,
 		}},
-		{"calibration availability", []byte("#CAL:10"), &CalibrationAvailabilityPacket{MainboardInternalCalibrationAvailable: true}},
-		{"serial number", []byte("#Sn0123456789ABCDEF"), &SerialNumberPacket{SN: "0123456789ABCDEF"}},
-		{"serial number empty", []byte("#Sn"), &SerialNumberPacket{}},
-		{"end of presets", []byte("#PCK"), &EndOfPresetsPacket{}},
+		{"calibration availability", []byte("#CAL:10"), &CalibrationAvailability{Mainboard: true}},
+		{"serial number", []byte("#Sn0123456789ABCDEF"), &SerialNumber{Serial: "0123456789ABCDEF"}},
+		{"serial number empty", []byte("#Sn"), &SerialNumber{}},
+		{"end of presets", []byte("#PCK"), &PresetsEnd{}},
 
-		{"unknown text", []byte("#QA:0"), &UnhandledPacket{Data: []byte("#QA:0")}},
-		{"unknown binary", []byte("$X123"), &UnhandledPacket{Data: []byte("$X123")}},
-		{"banner", []byte("RF Explorer 01.34"), &UnhandledPacket{Data: []byte("RF Explorer 01.34")}},
-		{"bare marker", []byte("#"), &UnhandledPacket{Data: []byte("#")}},
-		{"short text", []byte("#S"), &UnhandledPacket{Data: []byte("#S")}},
-		{"calculator mode without value", []byte("#C+"), &UnhandledPacket{Data: []byte("#C+")}},
-		{"empty", nil, &UnhandledPacket{}},
+		{"unknown text", []byte("#QA:0"), &Unhandled{Data: []byte("#QA:0")}},
+		{"unknown binary", []byte("$X123"), &Unhandled{Data: []byte("$X123")}},
+		{"banner", []byte("RF Explorer 01.34"), &Unhandled{Data: []byte("RF Explorer 01.34")}},
+		{"bare marker", []byte("#"), &Unhandled{Data: []byte("#")}},
+		{"short text", []byte("#S"), &Unhandled{Data: []byte("#S")}},
+		{"calculator mode without value", []byte("#C+"), &Unhandled{Data: []byte("#C+")}},
+		{"empty", nil, &Unhandled{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := decode(c.frame)
@@ -150,8 +150,8 @@ func TestCalibrationOffsets(t *testing.T) {
 	}
 }
 
-func repeatFloat(v float64, n int) []float64 {
-	s := make([]float64, n)
+func repeatFloat(v float32, n int) []float32 {
+	s := make([]float32, n)
 	for i := range s {
 		s[i] = v
 	}

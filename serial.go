@@ -7,11 +7,8 @@ import (
 	"go.bug.st/serial"
 )
 
-// DefaultBaudRate is the baud rate RF Explorer uses unless reconfigured.
-const DefaultBaudRate = BaudRate500000
-
-// OpenSerial opens the serial device an RF Explorer is connected to.
-func OpenSerial(device string, baud BaudRate) (io.ReadWriteCloser, error) {
+// openSerial opens the serial device an RF Explorer is connected to.
+func openSerial(device string, baud BaudRate) (io.ReadWriteCloser, error) {
 	port, err := serial.Open(device, &serial.Mode{
 		BaudRate: int(baud),
 		DataBits: 8,

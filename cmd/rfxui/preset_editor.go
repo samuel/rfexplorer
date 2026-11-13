@@ -216,15 +216,15 @@ func (e *presetEditor) OpenPreset(p *rfx.Preset, bandSetName string) {
 	e.IsNew = false
 	e.Index = p.Index
 	e.nameInput.SetText(p.Name)
-	e.minFreqInput.SetText(strconv.Itoa(p.MinFreqKHz))
-	e.maxFreqInput.SetText(strconv.Itoa(p.MaxFreqKHz))
-	e.ampTopInput.SetText(strconv.Itoa(p.AmpTopDBm))
-	e.ampBottomInput.SetText(strconv.Itoa(p.AmpBottomDBm))
-	e.calcIterationsInput.SetText(strconv.Itoa(p.CalcIterations))
+	e.minFreqInput.SetText(strconv.Itoa(int(p.Start / rfx.KHz)))
+	e.maxFreqInput.SetText(strconv.Itoa(int(p.Stop / rfx.KHz)))
+	e.ampTopInput.SetText(strconv.Itoa(p.AmpTop))
+	e.ampBottomInput.SetText(strconv.Itoa(p.AmpBottom))
+	e.calcIterationsInput.SetText(strconv.Itoa(p.Iterations))
 	e.mainboardSwitch.Value = p.Mainboard
-	e.calcModeDropdown.Selected = calcModeIndex(p.CalcMode)
+	e.calcModeDropdown.Selected = calcModeIndex(p.Calculator)
 	e.calcModeDropdown.open = false
-	e.markerModeDropdown.Selected = int(p.MarkerMode)
+	e.markerModeDropdown.Selected = int(p.Marker)
 	e.markerModeDropdown.open = false
 	e.bandSetDropdown.open = false
 	e.setBandSetByName(bandSetName)
@@ -253,14 +253,16 @@ func (e *presetEditor) OpenNew(index int, bandSetName string) {
 func (e *presetEditor) ToPreset() rfx.Preset {
 	p := rfx.Preset{Index: e.Index}
 	p.Name = e.nameInput.Text()
-	p.MinFreqKHz, _ = strconv.Atoi(e.minFreqInput.Text())
-	p.MaxFreqKHz, _ = strconv.Atoi(e.maxFreqInput.Text())
-	p.AmpTopDBm, _ = strconv.Atoi(e.ampTopInput.Text())
-	p.AmpBottomDBm, _ = strconv.Atoi(e.ampBottomInput.Text())
-	p.CalcIterations, _ = strconv.Atoi(e.calcIterationsInput.Text())
+	startKHz, _ := strconv.Atoi(e.minFreqInput.Text())
+	stopKHz, _ := strconv.Atoi(e.maxFreqInput.Text())
+	p.Start = rfx.Frequency(startKHz) * rfx.KHz
+	p.Stop = rfx.Frequency(stopKHz) * rfx.KHz
+	p.AmpTop, _ = strconv.Atoi(e.ampTopInput.Text())
+	p.AmpBottom, _ = strconv.Atoi(e.ampBottomInput.Text())
+	p.Iterations, _ = strconv.Atoi(e.calcIterationsInput.Text())
 	p.Mainboard = e.mainboardSwitch.Value
-	p.CalcMode = rfx.CalculatorMode(e.calcModeDropdown.Selected)
-	p.MarkerMode = rfx.MarkerMode(e.markerModeDropdown.Selected)
+	p.Calculator = rfx.CalculatorMode(e.calcModeDropdown.Selected)
+	p.Marker = rfx.MarkerMode(e.markerModeDropdown.Selected)
 	return p
 }
 

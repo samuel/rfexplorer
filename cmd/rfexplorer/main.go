@@ -171,7 +171,7 @@ const (
 	// connectTimeout bounds the wait for the device to answer on startup.
 	connectTimeout = 5 * time.Second
 	// configTimeout bounds the wait for the device to apply a new configuration.
-	configTimeout = 3 * time.Second
+	configTimeout = 10 * time.Second
 )
 
 // defaultDevice returns the serial device from RFX_DEVICE, falling back to
@@ -188,29 +188,16 @@ func main() {
 	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "Serial baud rate")
 	flag.Parse()
 
-	port, err := rfx.OpenSerial(*flagDevice, rfx.BaudRate(*flagBaud))
-	if err != nil {
-		log.Fatal(err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	rfe, err := rfx.New(ctx, port)
+	rfe, err := rfx.Open(ctx, *flagDevice, rfx.WithBaudRate(rfx.BaudRate(*flagBaud)))
 	cancel()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer rfe.Close() //nolint:errcheck // exiting, nothing to do with the error
+	sub := rfe.Subscribe(rfx.SubscribeOptions{})
 
-	if err := rfe.SetScreenDumpEnabled(false); err != nil {
-		log.Fatal(err)
-	}
-
-	lcdEnabled := false
-	if err := rfe.RequestConfig(); err != nil {
-		log.Fatal(err)
-	}
-	if err := rfe.RequestPresets(); err != nil {
-		log.Fatal(err)
-	}
+	var lcdEnabled bool
 
 	if err := termbox.Init(); err != nil {
 		log.Fatal(err)
@@ -230,12 +217,20 @@ func main() {
 	defer logFile.Close() //nolint:errcheck // best-effort debug log
 	logger := slog.New(slog.NewTextHandler(logFile, nil))
 
-	setRange := func(startKHz, endKHz int) error {
+	// command runs a device command, logging rather than exiting on failure
+	// since the device may simply not have answered in time.
+	command := func(name string, f func(ctx context.Context) error) {
 		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
 		defer cancel()
-		_, err := rfe.SetAnalyzerConfig(ctx, startKHz, endKHz, 0, -120, 0)
+		if err := f(ctx); err != nil {
+			logger.Error(name, "error", err)
+		}
+	}
+	setRange := func(ctx context.Context, start, stop rfx.Frequency) error {
+		_, err := rfe.SetSweep(ctx, rfx.SweepRequest{Start: start, Stop: stop, AmpTop: 0, AmpBottom: -120})
 		return err
 	}
+	command("disable screen dump", func(ctx context.Context) error { return rfe.SetScreenDump(ctx, false) })
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -256,49 +251,40 @@ func main() {
 				case 0:
 					switch ev.Ch {
 					case 'c':
-						if err := rfe.RequestConfig(); err != nil {
-							log.Fatal(err)
-						}
+						command("resume", func(ctx context.Context) error {
+							_, err := rfe.Resume(ctx)
+							return err
+						})
 					case 'h':
-						if err := rfe.Hold(); err != nil {
-							log.Fatal(err)
-						}
+						command("hold", rfe.Hold)
 					case 'l':
 						lcdEnabled = !lcdEnabled
-						if err := rfe.SetLCDEnabled(lcdEnabled); err != nil {
-							log.Fatal(err)
-						}
+						command("set LCD", func(ctx context.Context) error { return rfe.SetLCD(ctx, lcdEnabled) })
 					case 'm':
-						if err := rfe.SetMaxHold(); err != nil {
-							log.Fatal(err)
-						}
+						command("set max hold", func(ctx context.Context) error { return rfe.SetCalculator(ctx, rfx.CalculatorMaxHold) })
 					case 'r':
-						if err := rfe.Realtime(); err != nil {
-							log.Fatal(err)
-						}
+						command("set realtime", func(ctx context.Context) error { return rfe.SetCalculator(ctx, rfx.CalculatorNormal) })
 					case 's':
 						isDumping := atomic.LoadUint32(&dumpingScreen) ^ 1
 						atomic.StoreUint32(&dumpingScreen, isDumping)
-						if err := rfe.SetScreenDumpEnabled(isDumping != 0); err != nil {
-							log.Fatal(err)
-						}
+						command("set screen dump", func(ctx context.Context) error { return rfe.SetScreenDump(ctx, isDumping != 0) })
 					case 'v':
 						if atomic.LoadUint32(&vtx85ghz) == 0 {
-							if err := rfe.SwitchModuleMain(); err != nil {
-								log.Fatal(err)
-							}
-							if err := setRange(5350000, 5950000); err != nil {
-								logger.Error("set analyzer config", "error", err)
-							}
+							command("select VTX range", func(ctx context.Context) error {
+								if _, err := rfe.SelectModule(ctx, rfx.ModuleMain); err != nil {
+									return err
+								}
+								return setRange(ctx, 5350*rfx.MHz, 5950*rfx.MHz)
+							})
 							atomic.StoreUint32(&vtx85ghz, 1)
 						} else {
 							atomic.StoreUint32(&vtx85ghz, 0)
 						}
 					case 'w':
 						if atomic.LoadUint32(&wifi24) == 0 {
-							if err := setRange(2401000, 2495000); err != nil {
-								logger.Error("set analyzer config", "error", err)
-							}
+							command("select WiFi range", func(ctx context.Context) error {
+								return setRange(ctx, 2401*rfx.MHz, 2495*rfx.MHz)
+							})
 							atomic.StoreUint32(&wifi24, 1)
 						} else {
 							atomic.StoreUint32(&wifi24, 0)
@@ -309,12 +295,7 @@ func main() {
 		}
 	}()
 
-	config := &rfx.CurrentConfigPacket{
-		StartFreqKHZ: 0,
-		FreqStepHZ:   1000,
-		AmpTopDBM:    0,
-		AmpBottomDBM: -120,
-	}
+	config := rfe.Config()
 	var maxAmp float64
 	var maxAmpFreq, maxAmpStep int
 	var maxSamples []float64
@@ -323,29 +304,33 @@ func main() {
 	var sumCount int
 	for {
 		select {
-		case pkt, ok := <-rfe.Chan():
+		case pkt, ok := <-sub.C():
 			if !ok {
 				termbox.Close()
 				fmt.Fprintln(os.Stderr, "Connection lost:", rfe.Err())
 				os.Exit(1) //nolint:gocritic // the deferred cleanup is done above or not needed on exit
 			}
 			switch pkt := pkt.(type) {
-			case *rfx.CurrentConfigPacket:
-				logger.Info("config", "packet", fmt.Sprintf("%+v", *pkt))
-				config = pkt
-			case *rfx.SweepDataPacket:
+			case *rfx.SweepConfig:
+				logger.Info("config", "config", fmt.Sprintf("%+v", *pkt))
+				config = *pkt
+			case *rfx.Sweep:
+				samples := make([]float64, len(pkt.Samples))
+				for i, v := range pkt.Samples {
+					samples[i] = float64(v)
+				}
 				if atomic.LoadUint32(&dumpingScreen) != 0 {
 					break
 				}
-				if len(pkt.Samples) != len(maxSamples) {
-					maxSamples = make([]float64, len(pkt.Samples))
-					copy(maxSamples, pkt.Samples)
+				if len(samples) != len(maxSamples) {
+					maxSamples = make([]float64, len(samples))
+					copy(maxSamples, samples)
 				}
-				if len(pkt.Samples) != len(sumSamples) {
-					sumSamples = make([]float64, len(pkt.Samples))
+				if len(samples) != len(sumSamples) {
+					sumSamples = make([]float64, len(samples))
 				}
 				if numAvg > 0 {
-					for i, s := range pkt.Samples {
+					for i, s := range samples {
 						sumSamples[i] += s
 					}
 					sumCount++
@@ -353,7 +338,7 @@ func main() {
 						break
 					}
 					for i, s := range sumSamples {
-						pkt.Samples[i] = s / float64(sumCount)
+						samples[i] = s / float64(sumCount)
 						sumSamples[i] = 0
 					}
 					sumCount = 0
@@ -371,7 +356,7 @@ func main() {
 				top := 1
 				bottom := height - 2
 				left := 32
-				right := left + len(pkt.Samples)
+				right := left + len(samples)
 
 				// Axis
 				for x := left; x < right; x++ {
@@ -383,10 +368,10 @@ func main() {
 				termbox.SetCell(left-1, bottom, '+', termbox.ColorWhite, termbox.ColorBlack)
 
 				ampToY := func(amp float64) int {
-					return top + int(float64(bottom-top)*(amp-float64(config.AmpTopDBM))/float64(config.AmpBottomDBM-config.AmpTopDBM)+0.5)
+					return top + int(float64(bottom-top)*(amp-float64(config.AmpTop))/float64(config.AmpBottom-config.AmpTop)+0.5)
 				}
 				// freqToX := func(freqHZ int) int {
-				// 	return left + (freqHZ-config.StartFreqKHZ*1000+config.FreqStepHZ/2)/config.FreqStepHZ
+				// 	return left + (freqHZ-int(config.Start)+int(config.Step)/2)/int(config.Step)
 				// }
 
 				var channels []channel
@@ -415,10 +400,10 @@ func main() {
 				// }
 
 				if len(channels) == 0 {
-					for i, s := range pkt.Samples {
+					for i, s := range samples {
 						if s > maxAmp {
 							maxAmp = s
-							maxAmpFreq = config.StartFreqKHZ*1000 + i*config.FreqStepHZ
+							maxAmpFreq = int(config.Start) + i*int(config.Step)
 							maxAmpStep = i
 						}
 						y := ampToY(s)
@@ -463,8 +448,8 @@ func main() {
 				} else {
 					chanSums := make([]float64, len(channels))
 					chanCounts := make([]float64, len(channels))
-					for i, s := range pkt.Samples {
-						freq := config.StartFreqKHZ*1000 + i*config.FreqStepHZ
+					for i, s := range samples {
+						freq := int(config.Start) + i*int(config.Step)
 						for i, c := range channels {
 							diff := freq - c.centerFreqHz + c.widthHZ/2
 							if diff >= 0 && diff <= c.widthHZ {
@@ -500,24 +485,24 @@ func main() {
 					termbox.ColorWhite, termbox.ColorBlack)
 				putString(left+maxAmpStep-2, y-2, fmt.Sprintf("%.1f", maxAmp),
 					termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 0, fmt.Sprintf("CalcMode: %s", config.CalculatorMode), termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 1, fmt.Sprintf("MaxSpan: %d", config.MaxSpan), termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 2, fmt.Sprintf("MinFreq: %.3f", float64(config.MinFreqKHZ)/1000.0), termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 3, fmt.Sprintf("MaxFreq: %.3f", float64(config.MaxFreqKHZ)/1000.0), termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 4, fmt.Sprintf("SweepSteps: %d", config.SweepSteps), termbox.ColorWhite, termbox.ColorBlack)
-				putString(0, 5, fmt.Sprintf("RBW: %d khz", config.RBWKHZ), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 0, fmt.Sprintf("CalcMode: %s", config.Calculator), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 1, fmt.Sprintf("MaxSpan: %s", config.MaxSpan), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 2, fmt.Sprintf("MinFreq: %.3f", config.MinFreq.MHz()), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 3, fmt.Sprintf("MaxFreq: %.3f", config.MaxFreq.MHz()), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 4, fmt.Sprintf("SweepSteps: %d", config.Points), termbox.ColorWhite, termbox.ColorBlack)
+				putString(0, 5, fmt.Sprintf("RBW: %s", config.RBW), termbox.ColorWhite, termbox.ColorBlack)
 
 				// Amplitude labels
-				s := strconv.Itoa(config.AmpTopDBM)
+				s := strconv.Itoa(config.AmpTop)
 				putString(left-len(s)-1, top, s, termbox.ColorWhite, termbox.ColorBlack)
-				s = strconv.Itoa(config.AmpBottomDBM)
+				s = strconv.Itoa(config.AmpBottom)
 				putString(left-len(s)-1, bottom-1, s, termbox.ColorWhite, termbox.ColorBlack)
 
 				// Frequency labels
-				putString(left, bottom+1, fmt.Sprintf("%.3f", float64(config.StartFreqKHZ)/1000.0), termbox.ColorWhite, termbox.ColorBlack)
-				s = fmt.Sprintf("%.3f", float64(config.StartFreqKHZ*1000+config.FreqStepHZ*len(pkt.Samples))/1000000.0)
+				putString(left, bottom+1, fmt.Sprintf("%.3f", config.Start.MHz()), termbox.ColorWhite, termbox.ColorBlack)
+				s = fmt.Sprintf("%.3f", float64(int(config.Start)+int(config.Step)*len(samples))/1000000.0)
 				putString(right-len(s), bottom+1, s, termbox.ColorWhite, termbox.ColorBlack)
-				s = fmt.Sprintf("%.3f", float64(config.StartFreqKHZ*1000+config.FreqStepHZ*len(pkt.Samples)/2)/1000000.0)
+				s = fmt.Sprintf("%.3f", float64(int(config.Start)+int(config.Step)*len(samples)/2)/1000000.0)
 				putString(left+(right-left)/2-len(s)/2, bottom+1, s, termbox.ColorWhite, termbox.ColorBlack)
 
 				if err := termbox.Flush(); err != nil {
@@ -549,13 +534,10 @@ func main() {
 				if err := termbox.Flush(); err != nil {
 					log.Fatal(err)
 				}
-			// case *rfx.CalibrationAvailabilityPacket:
-			// case *rfx.SerialNumberPacket:
-			// case *rfx.CurrentSetupPacket:
-			case *rfx.UnhandledPacket:
-				logger.Info("unhandled packet", "data", hex.EncodeToString(pkt.Data))
+			case *rfx.Unhandled:
+				logger.Info("unhandled frame", "data", hex.EncodeToString(pkt.Data))
 			default:
-				logger.Info("packet", "type", pkt.Type(), "packet", fmt.Sprintf("%+v", pkt))
+				logger.Info("message", "kind", pkt.Kind().String(), "message", fmt.Sprintf("%+v", pkt))
 			}
 		case sig := <-ch:
 			fmt.Printf("Quitting due to signal %s", sig)

@@ -64,3 +64,90 @@ func TestScreenImage(t *testing.T) {
 		t.Errorf("short AtGray(100, 60) = %d, want %d", got, unlit)
 	}
 }
+
+func TestSweep(t *testing.T) {
+	s := &Sweep{Start: 2400 * MHz, Step: 500 * KHz, Samples: []float32{-90, -40, -95, -30.5, -100}}
+	if got := s.FrequencyAt(3); got != 2401500*KHz {
+		t.Errorf("FrequencyAt(3) = %s", got)
+	}
+	if i, dBm := s.Peak(); i != 3 || dBm != -30.5 {
+		t.Errorf("Peak = %d, %v", i, dBm)
+	}
+	for _, c := range []struct {
+		f    Frequency
+		want int
+		ok   bool
+	}{
+		{2400 * MHz, 0, true},
+		{2400*MHz + 249*KHz, 0, true},
+		{2400*MHz + 250*KHz, 1, true},
+		{2402 * MHz, 4, true},
+		{2402*MHz + 249*KHz, 4, true},
+		{2402*MHz + 250*KHz, 0, false},
+		{2400*MHz - 250*KHz, 0, true},
+		{2400*MHz - 251*KHz, 0, false},
+		{5 * GHz, 0, false},
+	} {
+		if i, ok := s.IndexOf(c.f); i != c.want || ok != c.ok {
+			t.Errorf("IndexOf(%s) = %d, %t; want %d, %t", c.f, i, ok, c.want, c.ok)
+		}
+	}
+
+	var empty Sweep
+	if i, _ := empty.Peak(); i != -1 {
+		t.Errorf("empty Peak index = %d", i)
+	}
+	if _, ok := empty.IndexOf(0); ok {
+		t.Error("empty IndexOf succeeded")
+	}
+}
+
+func TestSweepConfig(t *testing.T) {
+	c := SweepConfig{Start: 2400 * MHz, Step: 1 * MHz, Points: 101, ExpansionActive: true}
+	if c.Span() != 100*MHz || c.Stop() != 2500*MHz || c.Center() != 2450*MHz {
+		t.Errorf("span %s stop %s center %s", c.Span(), c.Stop(), c.Center())
+	}
+	if c.Module() != ModuleExpansion {
+		t.Errorf("module %s", c.Module())
+	}
+	var zero SweepConfig
+	if zero.Span() != 0 || zero.Stop() != 0 {
+		t.Errorf("zero config span %s stop %s", zero.Span(), zero.Stop())
+	}
+}
+
+func TestKinds(t *testing.T) {
+	msgs := []Message{
+		&Sweep{}, &SweepConfig{}, &DeviceInfo{}, &SerialNumber{}, &CalculatorChange{}, &Preset{}, &PresetsEnd{},
+		&ScreenImage{}, &Calibration{}, &CalibrationAvailability{}, &SnifferConfig{}, &RawData{}, &Unhandled{}, &ProtocolError{},
+	}
+	var all Kind
+	for _, m := range msgs {
+		k := m.Kind()
+		if k == 0 || k&(k-1) != 0 {
+			t.Errorf("%T: kind %d is not a single bit", m, k)
+		}
+		if all&k != 0 {
+			t.Errorf("%T: kind %s is shared", m, k)
+		}
+		all |= k
+	}
+	if all != KindAll {
+		t.Errorf("kinds cover %b, KindAll is %b", all, KindAll)
+	}
+}
+
+func TestDeviceInfo(t *testing.T) {
+	for _, c := range []struct {
+		info    DeviceInfo
+		presets int
+	}{
+		{DeviceInfo{Main: Model6G, Expansion: ModelWSUB3G}, 30},
+		{DeviceInfo{Main: ModelWSUB1GPlus, Expansion: ModelNone}, 100},
+		{DeviceInfo{Main: ModelWSUB3G, Expansion: Model6GPlus}, 30},
+	} {
+		if got := c.info.MaxPresets(); got != c.presets {
+			t.Errorf("%s/%s: MaxPresets = %d, want %d", c.info.Main, c.info.Expansion, got, c.presets)
+		}
+	}
+}
