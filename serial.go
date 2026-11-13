@@ -1,22 +1,25 @@
-//go:build linux || darwin
-
 package rfx
 
 import (
+	"fmt"
 	"io"
 
-	"github.com/jacobsa/go-serial/serial"
+	"go.bug.st/serial"
 )
 
-func OpenSerial(device string) (io.ReadWriteCloser, error) {
-	// TODO: currently a baud rate of 500,000 is assumed.
-	options := serial.OpenOptions{
-		PortName:        device,
-		BaudRate:        500000,
-		DataBits:        8,
-		ParityMode:      serial.PARITY_NONE,
-		StopBits:        1,
-		MinimumReadSize: 1,
+// DefaultBaudRate is the baud rate RF Explorer uses unless reconfigured.
+const DefaultBaudRate = BaudRate500000
+
+// OpenSerial opens the serial device an RF Explorer is connected to.
+func OpenSerial(device string, baud BaudRate) (io.ReadWriteCloser, error) {
+	port, err := serial.Open(device, &serial.Mode{
+		BaudRate: int(baud),
+		DataBits: 8,
+		Parity:   serial.NoParity,
+		StopBits: serial.OneStopBit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rfx: failed to open %s: %w", device, err)
 	}
-	return serial.Open(options)
+	return port, nil
 }

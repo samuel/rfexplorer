@@ -33,13 +33,11 @@ else:
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"io"
-	"log"
 	"sync"
 	"time"
 )
@@ -457,16 +455,37 @@ type Packet interface {
 	Type() string
 }
 
-type RFExplorer struct {
-	port          io.ReadWriteCloser
-	closeCh       chan struct{}
-	readCh        chan Packet
-	endOfPresetCh chan struct{}
+// ErrClosed is returned by operations on a closed RFExplorer.
+var ErrClosed = errors.New("rfx: closed")
 
-	txMu     sync.Mutex
-	writeBuf []byte
+// configEchoTimeout is how long to wait for the device to report a changed
+// configuration before asking for it. Echoes arrive within about 200 ms.
+var configEchoTimeout = 1500 * time.Millisecond
+
+type RFExplorer struct {
+	port       io.ReadWriteCloser
+	closeCh    chan struct{} // closed by Close
+	readerDone chan struct{} // closed when the reader exits
+	readCh     chan Packet
+	queue      *packetQueue
+	waiters    waiters
+	wg         sync.WaitGroup
+	closeOnce  sync.Once
+	closeErr   error
+
+	// reqMu serializes commands that wait for a response.
+	reqMu sync.Mutex
+	// txMu serializes writes to the port.
+	txMu sync.Mutex
+	// txReady is signaled when the device may have room for another command.
+	txReady chan struct{}
+
+	flowMu sync.Mutex
+	flow   txWindow
 
 	mu                                          sync.RWMutex
+	err                                         error
+	config                                      *CurrentConfigPacket
 	mainBoardModel                              Model
 	expansionBoardModel                         Model
 	activeModel                                 Model
@@ -474,58 +493,100 @@ type RFExplorer struct {
 	spectrumAnalyzerEmbeddedCalibrationOffsetDB []float64
 }
 
-// New initiates a connection to the RF Explorer over the provided device.
-func New(port io.ReadWriteCloser) (*RFExplorer, error) {
+// New starts communicating with the RF Explorer connected to port and
+// requests its configuration. ctx bounds the wait for the device to answer.
+// A device that is not in an analyzer mode may not respond.
+func New(ctx context.Context, port io.ReadWriteCloser) (*RFExplorer, error) {
 	rf := &RFExplorer{
-		port:          port,
-		writeBuf:      make([]byte, 256),
-		closeCh:       make(chan struct{}),
-		readCh:        make(chan Packet, 16),
-		endOfPresetCh: make(chan struct{}, 1),
+		port:       port,
+		closeCh:    make(chan struct{}),
+		readerDone: make(chan struct{}),
+		readCh:     make(chan Packet, 16),
+		queue:      newPacketQueue(),
+		txReady:    make(chan struct{}, 1),
 
 		mainBoardModel:      ModelNone,
 		expansionBoardModel: ModelNone,
 		activeModel:         ModelNone,
 		calculatorMode:      CalculatorModeNormal,
 	}
+	rf.wg.Add(2)
 	go rf.readLoop()
+	go rf.forwardLoop()
 
-	// Get the initial config
-	// TODO: this fails depending on mode
-	if err := rf.RequestConfig(); err != nil {
+	w := rf.waiters.add(isConfig)
+	err := rf.RequestConfig()
+	if err == nil {
+		if _, err = rf.await(ctx, w); err != nil {
+			err = fmt.Errorf("rfx: no response to config request: %w", err)
+		}
+	}
+	if err == nil {
+		err = rf.RequestInternalCalibrationData()
+	}
+	if err != nil {
 		_ = rf.Close() // returning the original error
 		return nil, err
-	}
-setupLoop:
-	for {
-		// TODO: timeout
-		pkt, ok := <-rf.Chan()
-		if !ok {
-			_ = rf.Close() // returning the original error
-			return nil, errors.New("rfx: failed to get current config")
-		}
-		switch pkt.(type) {
-		case *CurrentConfigPacket:
-			if err := rf.RequestInternalCalibrationData(); err != nil {
-				_ = rf.Close() // returning the original error
-				return nil, err
-			}
-			// TODO: wait for calibration data
-			break setupLoop
-		}
 	}
 	return rf, nil
 }
 
-// Close close the communucation device.
-func (r *RFExplorer) Close() error {
-	close(r.closeCh)
-	close(r.readCh)
-	return r.port.Close()
+func isConfig(pkt Packet) bool {
+	_, ok := pkt.(*CurrentConfigPacket)
+	return ok
 }
 
-func (r *RFExplorer) Chan() chan Packet {
+func isEndOfPresets(pkt Packet) bool {
+	_, ok := pkt.(*EndOfPresetsPacket)
+	return ok
+}
+
+// Close stops communication and closes the port. The packet channel is
+// closed once Close returns.
+func (r *RFExplorer) Close() error {
+	r.closeOnce.Do(func() {
+		close(r.closeCh)
+		r.closeErr = r.port.Close()
+		r.wg.Wait()
+	})
+	return r.closeErr
+}
+
+// Chan returns the channel of packets received from the device. It is closed
+// after Close or when reading from the port fails; see Err. If the consumer
+// falls behind, the oldest sweeps and screen images are discarded.
+func (r *RFExplorer) Chan() <-chan Packet {
 	return r.readCh
+}
+
+// Err returns the error that stopped reading from the port, or nil if reading
+// is still active or was stopped by Close.
+func (r *RFExplorer) Err() error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.err
+}
+
+// Dropped returns the number of packets discarded because the consumer of
+// Chan fell behind.
+func (r *RFExplorer) Dropped() uint64 {
+	return r.queue.droppedCount()
+}
+
+// await waits for the packet w was registered for.
+func (r *RFExplorer) await(ctx context.Context, w *waiter) (Packet, error) {
+	defer r.waiters.remove(w)
+	select {
+	case pkt := <-w.ch:
+		return pkt, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.readerDone:
+		if err := r.Err(); err != nil {
+			return nil, err
+		}
+		return nil, ErrClosed
+	}
 }
 
 // SetLCDEnabled requests RF Explorer to turn the LCD on or off.
@@ -544,10 +605,10 @@ func (r *RFExplorer) SetScreenDumpEnabled(enabled bool) error {
 	return r.SendCommand("D0")
 }
 
-func (r *RFExplorer) SetTrackingStep(n int) error {
-	// return r.SendCommand("k" + )
-	// this.SendCommand("k" + (object) Convert.ToChar(Convert.ToByte((int) nStep >> 8)) + (object) Convert.ToChar(Convert.ToByte((int) nStep & (int) byte.MaxValue)));
-	return nil // TODO
+// SetTrackingStep requests the device to jump to a tracking step frequency
+// and measure it immediately.
+func (r *RFExplorer) SetTrackingStep(step uint16) error {
+	return r.SendCommand(string([]byte{'k', byte(step >> 8), byte(step)}))
 }
 
 func (r *RFExplorer) ResetInternalBuffers() error {
@@ -569,57 +630,35 @@ func (r *RFExplorer) RequestPresets() error {
 	return r.SendCommand("CP\x00")
 }
 
-// UpdatePreset updates a stored preset.
+// UpdatePreset stores a preset on the device and waits for it to be
+// acknowledged.
 func (r *RFExplorer) UpdatePreset(ctx context.Context, p *Preset) error {
-	// "#$CP" \x01 index:byte name:byte*12 \x00 \x00 minfreqkhz:uint32 maxfeqkhz:uint32 calcmode:byte amptop:int8 ampbottom:int8 calciter:byte mainboard:bool markermode:byte \x42 \x00
-	buf := make([]byte, 36)
-	buf[0] = '#'
-	buf[1] = 0x24
-	buf[2] = 'C'
-	buf[3] = 'P'
-	buf[4] = 0x01
-
-	// TODO: filter invalid characters from name
-	// TODO: validate / clamp all parameters
-	buf[5] = byte(p.Index)
-	name := p.Name
-	if len(name) > 12 {
-		name = name[:12]
-	}
-	copy(buf[6:], name)
-	buf[6+len(name)] = 0
-	buf[18] = 0
-	buf[19] = 0
-	binary.LittleEndian.PutUint32(buf[20:24], uint32(p.MinFreqKHz))
-	binary.LittleEndian.PutUint32(buf[24:28], uint32(p.MaxFreqKHz))
-	buf[28] = byte(p.CalcMode)
-	buf[29] = byte(int8(p.AmpTopDBm))
-	buf[30] = byte(int8(p.AmpBottomDBm))
-	buf[31] = byte(p.CalcIterations)
-	if p.Mainboard {
-		buf[32] = 1
-	} else {
-		buf[32] = 0
-	}
-	buf[33] = byte(p.MarkerMode)
-	buf[34] = 0x42
-	buf[35] = 0
-	// Clear end of preset channel so we can know if we receive one.
-	select {
-	case <-r.endOfPresetCh:
-	default:
-	}
-	if err := r.write(buf[:36]); err != nil {
+	if err := p.Validate(); err != nil {
 		return err
+	}
+	return r.writePreset(ctx, p)
+}
 
+// DeletePreset clears the preset slot at index and waits for it to be
+// acknowledged.
+func (r *RFExplorer) DeletePreset(ctx context.Context, index int) error {
+	if index < 0 || index >= MaxPresets {
+		return fmt.Errorf("rfx: preset index %d out of range [0,%d]", index, MaxPresets-1)
 	}
-	// Wait for end of presets
-	select {
-	case <-r.endOfPresetCh:
-	case <-ctx.Done():
-		return ctx.Err()
+	// A slot with an empty name is unused.
+	return r.writePreset(ctx, &Preset{Index: index})
+}
+
+func (r *RFExplorer) writePreset(ctx context.Context, p *Preset) error {
+	r.reqMu.Lock()
+	defer r.reqMu.Unlock()
+	w := r.waiters.add(isEndOfPresets)
+	if err := r.write(encodePreset(p)); err != nil {
+		r.waiters.remove(w)
+		return err
 	}
-	return nil
+	_, err := r.await(ctx, w)
+	return err
 }
 
 // RequestInternalCalibrationData requests RF Explorer to send the current configuration.
@@ -667,27 +706,41 @@ func (r *RFExplorer) SetBaudRate(br BaudRate) error {
 	return fmt.Errorf("rfx: unknown baud rate %d", br)
 }
 
-// Realtime sets RF Explorer SA device in Calculator:Normal, this is useful to minimize spikes and spurs produced by unwanted signals
+// Realtime sets the calculator to normal mode, which minimizes spikes and
+// spurs produced by unwanted signals.
 func (r *RFExplorer) Realtime() error {
-	return r.SendCommand("C+\x00")
+	return r.SetCalculatorMode(CalculatorModeNormal)
 }
 
+// SetMaxHold sets the calculator to max hold mode, which captures fast
+// transient signals.
 func (r *RFExplorer) SetMaxHold() error {
-	return r.SendCommand("C+\x04")
+	return r.SetCalculatorMode(CalculatorModeMaxHold)
 }
 
 func (r *RFExplorer) SetCalculatorMode(mode CalculatorMode) error {
-	return r.SendCommand(fmt.Sprintf("C+%c", byte(mode)))
+	if mode < CalculatorModeNormal || mode > CalculatorModeMaxHistorical {
+		return fmt.Errorf("rfx: invalid calculator mode %d", int(mode))
+	}
+	return r.SendCommand(string([]byte{'C', '+', byte(mode)}))
 }
 
+// SetWifiMode enables or disables the WiFi analyzer. The mode is sent as a
+// raw byte; firmware 1.34 ignores an ASCII digit. Leaving WiFi mode does not
+// restore the previous frequency range or calculator mode.
 func (r *RFExplorer) SetWifiMode(mode WifiMode) error {
-	return r.SendCommand(fmt.Sprintf("CW%d", byte(mode)))
+	if mode > WifiMode5GHz {
+		return fmt.Errorf("rfx: invalid WiFi mode %d", mode)
+	}
+	return r.SendCommand(string([]byte{'C', 'W', byte(mode)}))
 }
 
 // TODO: SetDSP	#<Size>Cp <DSP_Mode>	Request RF Explorer to set onboard DSP mode <Size>=5 bytes	1.12
 
+// Shutdown powers the device off. Per the UART specification (firmware
+// 1.11+); not exercised against hardware.
 func (r *RFExplorer) Shutdown() error {
-	return r.SendCommand("S") // or is it "CS"
+	return r.SendCommand("S")
 }
 
 func (r *RFExplorer) SetGeneratorPower(on bool) error {
@@ -699,53 +752,40 @@ func (r *RFExplorer) SetGeneratorPower(on bool) error {
 
 // TODO: SetOffsetDB	#<Size>CO <OffsetDB>	Request RF Explorer to set onboard Amplitude Offset in dB <Size>=5 bytes
 // TODO: SetInputStage	#<Size>a <InputStage>	Request RF Explorer to set onboard input stage mode, available in WSUB1G+ and IoT models only <Size>=4 bytes
-// TODO: SetSweepPointsLarge	#<Size>Cj <Sample_points_large>	Request RF Explorer to change to new data point sweep size <Size>=6 bytes - this mode support sweep sizes up to 65536 data points
 
-// SetSweepPoints sets the number of sweep data points (16-4096, multiple of 16).
-// May only work with 112, 240, and 512 or may not do anything at all.
+// SetSweepPoints sets the number of sweep data points (16-4096, multiple of
+// 16). Only models with selectable resolution act on it; a 6G + WSUB3G unit
+// on firmware 1.34 stays at 112 points.
 func (r *RFExplorer) SetSweepPoints(steps int) error {
-	if steps < 16 {
-		steps = 16
-	}
-	if steps > 4096 {
-		steps = 4096
-	}
-	return r.SendCommand("CJ" + string([]byte{byte((steps - 16) / 16)}))
+	steps = min(max(steps, 16), 4096)
+	return r.SendCommand(string([]byte{'C', 'J', byte((steps - 16) / 16)}))
 }
 
-// SetSweepPointsEx sets the number of sweep data points (112-65536, multiple of 2).
+// SetSweepPointsEx sets the number of sweep data points (112-65535). See
+// SetSweepPoints for model support.
 func (r *RFExplorer) SetSweepPointsEx(steps int) error {
-	if steps < 112 {
-		steps = 112
-	}
-	if steps > 65536 {
-		steps = 65536
-	}
-	return r.SendCommand("Cj" + string([]byte{byte((steps & 0xff00) >> 8), byte(steps & 0xff)}))
+	steps = min(max(steps, 112), MaxSpectrumSteps)
+	return r.SendCommand(string([]byte{'C', 'j', byte(steps >> 8), byte(steps)}))
 }
 
-// SetAnalyzerConfig will change current configuration for RF Explorer and send current Spectrum Analyzer configuration data back to PC.
-// rbwKHZ is currently ignored by the firmware.
-func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZ int) error {
-	// #<Size>C2-F: <Start_Freq>, <End_Freq>, <Amp_Top>, <Amp_Bottom>, <RBW_KHZ>
+// SetAnalyzerConfig changes the frequency range and displayed amplitude range
+// and returns the configuration the device reports afterwards, which may
+// differ from the request. rbwKHZ of 0 leaves the resolution bandwidth to the
+// device.
+func (r *RFExplorer) SetAnalyzerConfig(ctx context.Context, startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZ int) (*CurrentConfigPacket, error) {
+	// #<Size>C2-F:<Start_Freq>,<End_Freq>,<Amp_Top>,<Amp_Bottom>[,<RBW_KHZ>]
 	// <Start_Freq>, <End_Freq> = 7 ascii digits, decimal
 	// <Amp_Top>, <Amp_Bottom> = 4 ascii digits, decimal
 	// <RBW_KHZ> = 5 ascii digits, decimal
-	if startFreqKHZ < 0 || endFreqKHZ < 0 || startFreqKHZ > 9999999 || endFreqKHZ > 9999999 {
-		return errors.New("rfx: SetAnalyzerConfig startFreqKHZ and endFreqKHZ must be in the range [0,9999999]")
+	if startFreqKHZ < 0 || endFreqKHZ > maxFreqKHz || startFreqKHZ >= endFreqKHZ {
+		return nil, fmt.Errorf("rfx: frequency range %d to %d kHz is invalid", startFreqKHZ, endFreqKHZ)
 	}
-	if ampTopDBm > 0 {
-		ampTopDBm = 0
-	}
-	if ampTopDBm < -120 {
-		ampTopDBm = -120
-	}
-	if ampBottomDBm >= ampTopDBm || ampBottomDBm < -120 {
-		ampBottomDBm = -120
+	if err := validateAmplitude(ampTopDBm, ampBottomDBm); err != nil {
+		return nil, err
 	}
 
 	var rbwKHZStr string
-	if rbwKHZ > 0 && rbwKHZ >= 3 && rbwKHZ <= 670 {
+	if rbwKHZ >= 3 && rbwKHZ <= 670 {
 		steps := min(max((endFreqKHZ-startFreqKHZ+rbwKHZ/2)/rbwKHZ, 112), MaxSpectrumSteps)
 		rbwKHZ = (endFreqKHZ - startFreqKHZ + steps/2) / steps
 		if rbwKHZ >= 3 && rbwKHZ < 620 {
@@ -753,37 +793,69 @@ func (r *RFExplorer) SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBm, ampB
 		}
 	}
 
-	cmd := fmt.Sprintf("C2-F:%07d,%07d,%04d,%04d%s", startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZStr)
-	if err := r.SendCommand(cmd); err != nil {
-		return err
+	r.reqMu.Lock()
+	defer r.reqMu.Unlock()
+
+	// The device only reports its configuration when the command changed it.
+	if !r.configMatches(startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm) || rbwKHZStr != "" {
+		w := r.waiters.add(func(pkt Packet) bool {
+			cfg, ok := pkt.(*CurrentConfigPacket)
+			return ok && cfg.StartFreqKHZ == startFreqKHZ
+		})
+		cmd := fmt.Sprintf("C2-F:%07d,%07d,%04d,%04d%s", startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm, rbwKHZStr)
+		if err := r.SendCommand(cmd); err != nil {
+			r.waiters.remove(w)
+			return nil, err
+		}
+		echoCtx, cancel := context.WithTimeout(ctx, configEchoTimeout)
+		pkt, err := r.await(echoCtx, w)
+		cancel()
+		if err == nil {
+			return pkt.(*CurrentConfigPacket), nil
+		}
+		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		// No echo: the device adjusted the range or considered it unchanged.
 	}
-	// wait some time for the unit to process changes, otherwise may get a different command too soon
-	time.Sleep(time.Millisecond * 500)
-	return nil
+
+	w := r.waiters.add(isConfig)
+	if err := r.RequestConfig(); err != nil {
+		r.waiters.remove(w)
+		return nil, err
+	}
+	pkt, err := r.await(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	return pkt.(*CurrentConfigPacket), nil
 }
 
-// Sample rate value should be in range 20,000 – 500,000 for OOK RAW modulation modes usually found
-// in commercial devices, but some experimentation may be needed. This is the sample rate at which
-// the internal decoder will detect activity – the higher this value the better capture resolution
-// but at the cost of a shorter capture time lapse.
-func (r *RFExplorer) SetSnifferConfig(centerFreqKHZ int, sampleRate int) error {
-	return nil // TODO
+// configMatches reports whether the last configuration reported by the
+// device already has the given ranges.
+func (r *RFExplorer) configMatches(startFreqKHZ, endFreqKHZ, ampTopDBm, ampBottomDBm int) bool {
+	r.mu.RLock()
+	cfg := r.config
+	r.mu.RUnlock()
+	if cfg == nil || cfg.StartFreqKHZ != startFreqKHZ || cfg.AmpTopDBM != ampTopDBm || cfg.AmpBottomDBM != ampBottomDBm {
+		return false
+	}
+	// The device reports a step size rather than the end frequency.
+	end := cfg.StartFreqKHZ + cfg.FreqStepHZ*(cfg.SweepSteps-1)/1000
+	return end >= endFreqKHZ-1 && end <= endFreqKHZ+1
 }
 
-// SendCommand sends a "#" command to the RF Explorer
+// SendCommand sends a "#" command to the RF Explorer. The device buffers 64
+// bytes of commands and handles about one per sweep, so SendCommand blocks
+// when more than that is pending.
 func (r *RFExplorer) SendCommand(cmd string) error {
-	r.txMu.Lock()
-	defer r.txMu.Unlock()
 	if len(cmd) > 253 {
 		return fmt.Errorf("rfx: command may not exceed a length of 253, got %d", len(cmd))
 	}
-	if cap(r.writeBuf) < len(cmd)+2 {
-		r.writeBuf = make([]byte, len(cmd)+2)
-	}
-	r.writeBuf[0] = '#'
-	r.writeBuf[1] = byte(2 + len(cmd))
-	copy(r.writeBuf[2:], cmd)
-	return r.write(r.writeBuf[:2+len(cmd)])
+	buf := make([]byte, 0, 2+len(cmd))
+	buf = append(buf, '#', byte(2+len(cmd)))
+	buf = append(buf, cmd...)
+	return r.write(buf)
 }
 
 // ActiveModel returns the currently active board model.
@@ -815,6 +887,26 @@ func (r *RFExplorer) CalculatorMode() CalculatorMode {
 }
 
 func (r *RFExplorer) write(b []byte) error {
+	r.txMu.Lock()
+	defer r.txMu.Unlock()
+	// Wait for room in the device's receive buffer.
+	for {
+		r.flowMu.Lock()
+		wait, ok := r.flow.reserve(len(b), time.Now())
+		r.flowMu.Unlock()
+		if ok {
+			break
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-r.txReady:
+		case <-timer.C:
+		case <-r.closeCh:
+			timer.Stop()
+			return ErrClosed
+		}
+		timer.Stop()
+	}
 	if n, err := r.port.Write(b); err != nil {
 		return fmt.Errorf("rfx: failed to write to port: %w", err)
 	} else if n != len(b) {
@@ -823,24 +915,15 @@ func (r *RFExplorer) write(b []byte) error {
 	return nil
 }
 
-func (r *RFExplorer) handlePacket(pkt Packet) {
-	r.readCh <- pkt
-}
-
+// readLoop reads from the port until it fails or is closed. It never blocks
+// on the consumer.
 func (r *RFExplorer) readLoop() {
+	defer r.wg.Done()
+	defer close(r.readerDone)
 	var f framer
 	buf := make([]byte, 4096)
 	for {
 		n, err := r.port.Read(buf)
-		if err != nil {
-			// TODO
-			log.Fatal(err)
-		}
-		select {
-		case <-r.closeCh:
-			return
-		default:
-		}
 		f.Write(buf[:n])
 		for {
 			frame, ok := f.Next()
@@ -852,7 +935,48 @@ func (r *RFExplorer) readLoop() {
 				pkt = &DecodeErrorPacket{Data: bytes.Clone(frame), Err: err}
 			}
 			r.updateState(pkt)
-			r.handlePacket(pkt)
+			r.waiters.deliver(pkt)
+			r.queue.push(pkt)
+		}
+		if err != nil {
+			select {
+			case <-r.closeCh:
+			default:
+				r.mu.Lock()
+				r.err = fmt.Errorf("rfx: failed to read from port: %w", err)
+				r.mu.Unlock()
+			}
+			return
+		}
+	}
+}
+
+// forwardLoop moves packets from the queue to the packet channel and closes
+// the channel once reading has stopped and the queue is drained, or on Close.
+func (r *RFExplorer) forwardLoop() {
+	defer r.wg.Done()
+	defer close(r.readCh)
+	for {
+		pkt, ok := r.queue.pop()
+		if !ok {
+			select {
+			case <-r.closeCh:
+				return
+			case <-r.queue.notify:
+			case <-r.readerDone:
+				// The reader may have queued packets just before exiting.
+				if pkt, ok = r.queue.pop(); !ok {
+					return
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+		select {
+		case r.readCh <- pkt:
+		case <-r.closeCh:
+			return
 		}
 	}
 }
@@ -864,8 +988,17 @@ func (r *RFExplorer) updateState(pkt Packet) {
 		r.mu.Lock()
 		r.calculatorMode = pkt.Mode
 		r.mu.Unlock()
+	case *SweepDataPacket:
+		r.flowMu.Lock()
+		r.flow.sweep(time.Now())
+		r.flowMu.Unlock()
+		select {
+		case r.txReady <- struct{}{}:
+		default:
+		}
 	case *CurrentConfigPacket:
 		r.mu.Lock()
+		r.config = pkt
 		if pkt.ExpModuleActive {
 			r.activeModel = r.expansionBoardModel
 		} else {
@@ -882,12 +1015,5 @@ func (r *RFExplorer) updateState(pkt Packet) {
 		r.mu.Lock()
 		r.spectrumAnalyzerEmbeddedCalibrationOffsetDB = calibrationOffsetsDB(r.activeModel, pkt.Data)
 		r.mu.Unlock()
-	case *EndOfPresetsPacket:
-		// Wake a pending UpdatePreset. A signal is already queued if nothing
-		// is waiting.
-		select {
-		case r.endOfPresetCh <- struct{}{}:
-		default:
-		}
 	}
 }

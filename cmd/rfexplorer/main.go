@@ -4,6 +4,7 @@ package main
 // https://en.wikipedia.org/wiki/List_of_WLAN_channels#5.C2.A0GHz_.28802.11a.2Fh.2Fj.2Fn.2Fac.29.5B18.5D
 
 import (
+	"context"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	termbox "github.com/nsf/termbox-go"
 	"samuelks.com/rfx"
@@ -165,6 +167,13 @@ var vtx58Channels = []channel{
 // 	{name: "26", centerFreqHz: 2480000000, widthHZ: 2000000, note:"No Conflict Newer non-PRO XBee only"},
 // }
 
+const (
+	// connectTimeout bounds the wait for the device to answer on startup.
+	connectTimeout = 5 * time.Second
+	// configTimeout bounds the wait for the device to apply a new configuration.
+	configTimeout = 3 * time.Second
+)
+
 // defaultDevice returns the serial device from RFX_DEVICE, falling back to
 // the usual macOS name of the CP210x USB bridge.
 func defaultDevice() string {
@@ -176,13 +185,16 @@ func defaultDevice() string {
 
 func main() {
 	flagDevice := flag.String("dev", defaultDevice(), "Path to serial device (default from RFX_DEVICE)")
+	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "Serial baud rate")
 	flag.Parse()
 
-	port, err := rfx.OpenSerial(*flagDevice)
+	port, err := rfx.OpenSerial(*flagDevice, rfx.BaudRate(*flagBaud))
 	if err != nil {
 		log.Fatal(err)
 	}
-	rfe, err := rfx.New(port)
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	rfe, err := rfx.New(ctx, port)
+	cancel()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -217,6 +229,13 @@ func main() {
 	}
 	defer logFile.Close() //nolint:errcheck // best-effort debug log
 	logger := slog.New(slog.NewTextHandler(logFile, nil))
+
+	setRange := func(startKHz, endKHz int) error {
+		ctx, cancel := context.WithTimeout(context.Background(), configTimeout)
+		defer cancel()
+		_, err := rfe.SetAnalyzerConfig(ctx, startKHz, endKHz, 0, -120, 0)
+		return err
+	}
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -268,8 +287,8 @@ func main() {
 							if err := rfe.SwitchModuleMain(); err != nil {
 								log.Fatal(err)
 							}
-							if err := rfe.SetAnalyzerConfig(5350000, 5950000, 0, -120, 0); err != nil {
-								log.Fatal(err)
+							if err := setRange(5350000, 5950000); err != nil {
+								logger.Error("set analyzer config", "error", err)
 							}
 							atomic.StoreUint32(&vtx85ghz, 1)
 						} else {
@@ -277,8 +296,8 @@ func main() {
 						}
 					case 'w':
 						if atomic.LoadUint32(&wifi24) == 0 {
-							if err := rfe.SetAnalyzerConfig(2401000, 2495000, 0, -120, 0); err != nil {
-								log.Fatal(err)
+							if err := setRange(2401000, 2495000); err != nil {
+								logger.Error("set analyzer config", "error", err)
 							}
 							atomic.StoreUint32(&wifi24, 1)
 						} else {
@@ -304,7 +323,12 @@ func main() {
 	var sumCount int
 	for {
 		select {
-		case pkt := <-rfe.Chan():
+		case pkt, ok := <-rfe.Chan():
+			if !ok {
+				termbox.Close()
+				fmt.Fprintln(os.Stderr, "Connection lost:", rfe.Err())
+				os.Exit(1) //nolint:gocritic // the deferred cleanup is done above or not needed on exit
+			}
 			switch pkt := pkt.(type) {
 			case *rfx.CurrentConfigPacket:
 				logger.Info("config", "packet", fmt.Sprintf("%+v", *pkt))

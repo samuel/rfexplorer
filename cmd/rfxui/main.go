@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
+	"time"
 
 	"gioui.org/app"
 	"gioui.org/unit"
 
 	"samuelks.com/rfx"
 )
+
+// connectTimeout bounds the wait for the device to answer on startup.
+const connectTimeout = 5 * time.Second
 
 // defaultDevice returns the serial device from RFX_DEVICE, falling back to
 // the usual macOS name of the CP210x USB bridge.
@@ -22,13 +27,16 @@ func defaultDevice() string {
 
 func main() {
 	flagDevice := flag.String("dev", defaultDevice(), "Path to serial device (default from RFX_DEVICE)")
+	flagBaud := flag.Int("baud", int(rfx.DefaultBaudRate), "Serial baud rate")
 	flag.Parse()
 
-	port, err := rfx.OpenSerial(*flagDevice)
+	port, err := rfx.OpenSerial(*flagDevice, rfx.BaudRate(*flagBaud))
 	if err != nil {
 		log.Fatal(err)
 	}
-	rfe, err := rfx.New(port)
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	rfe, err := rfx.New(ctx, port)
+	cancel()
 	if err != nil {
 		log.Fatal(err)
 	}

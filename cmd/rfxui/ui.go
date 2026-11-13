@@ -220,6 +220,15 @@ func (ui *UI) setPresets(presets []*rfx.Preset) {
 	}
 }
 
+// setAnalyzerConfig changes the frequency and amplitude range, waiting
+// briefly for the device to confirm.
+func (ui *UI) setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ampTopDBM, ampBottomDBM int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := ui.rfe.SetAnalyzerConfig(ctx, startFreqKHZ, endFreqKHZ, ampTopDBM, ampBottomDBM, 0)
+	return err
+}
+
 // Run handles window events and renders the application.
 func (ui *UI) Run(w *app.Window) error {
 	var ops op.Ops
@@ -230,7 +239,12 @@ func (ui *UI) Run(w *app.Window) error {
 		for {
 			var pkt rfx.Packet
 			select {
-			case pkt = <-ui.rfe.Chan():
+			case p, ok := <-ui.rfe.Chan():
+				if !ok {
+					log.Printf("Connection lost: %v", ui.rfe.Err())
+					return
+				}
+				pkt = p
 			case <-stopCh:
 				return
 			}
@@ -325,7 +339,7 @@ func (ui *UI) Run(w *app.Window) error {
 						log.Printf("Failed to switch to expansion module: %s", err)
 					}
 				}
-				if err := ui.rfe.SetAnalyzerConfig(p.MinFreqKHz, p.MaxFreqKHz, p.AmpTopDBm, p.AmpBottomDBm, 0); err != nil {
+				if err := ui.setAnalyzerConfig(p.MinFreqKHz, p.MaxFreqKHz, p.AmpTopDBm, p.AmpBottomDBm); err != nil {
 					log.Printf("Failed to apply preset: %s", err)
 				}
 				bandSetName := pe.SelectedBandSetName()
@@ -361,13 +375,13 @@ func (ui *UI) Run(w *app.Window) error {
 			}
 			if pe.PendingDelete {
 				pe.PendingDelete = false
-				blank := rfx.Preset{Index: pe.Index}
+				index := pe.Index
 				ui.uiConfig.SetBandSetFor(pe.Index, "")
 				ui.saveUIConfig()
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					if err := ui.rfe.UpdatePreset(ctx, &blank); err != nil {
+					if err := ui.rfe.DeletePreset(ctx, index); err != nil {
 						log.Printf("Failed to delete preset: %s", err)
 						return
 					}
@@ -417,7 +431,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				freqSpanMHZ := float64(ui.rfeConfig.FreqStepHZ*(ui.rfeConfig.SweepSteps-1)) / 1e6
 				startFreqKHZ := int((centerFreqMHZ - freqSpanMHZ/2) * 1000)
 				endFreqKHZ := int((centerFreqMHZ + freqSpanMHZ/2) * 1000)
-				if err := ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
+				if err := ui.setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM); err != nil {
 					log.Printf("Failed to set analyzer config: %s", err)
 				}
 			}
@@ -435,7 +449,7 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 				startFreqKHZ := int(math.Round((centerFreqMHZ - freqSpanMHZ/2) * 1000))
 				endFreqKHZ := int(math.Round((centerFreqMHZ + freqSpanMHZ/2) * 1000))
 				fmt.Println(startFreqKHZ, endFreqKHZ, centerFreqMHZ)
-				if err := ui.rfe.SetAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM, 0); err != nil {
+				if err := ui.setAnalyzerConfig(startFreqKHZ, endFreqKHZ, ui.rfeConfig.AmpTopDBM, ui.rfeConfig.AmpBottomDBM); err != nil {
 					log.Printf("Failed to set analyzer config: %s", err)
 				}
 			}
