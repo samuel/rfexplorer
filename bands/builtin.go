@@ -1,6 +1,7 @@
 package bands
 
 import (
+	"fmt"
 	"strconv"
 
 	"samuelks.com/rfx"
@@ -14,6 +15,15 @@ const (
 	NameZigbee = "Zigbee (2.4 GHz)"
 	NameMURS   = "MURS"
 	NameGMRS   = "GMRS"
+
+	NameBluetooth   = "Bluetooth (2.4 GHz)"
+	NameLoRaUS915   = "LoRaWAN US915"
+	NameLoRaEU868   = "LoRaWAN EU868"
+	NameLPD433      = "LPD433"
+	NamePMR446      = "PMR446"
+	NameMarineVHF   = "Marine VHF"
+	NameNOAAWeather = "NOAA Weather Radio"
+	NameAmateurVHF  = "Amateur VHF/UHF (US)"
 )
 
 const (
@@ -24,6 +34,9 @@ const (
 	fpvWidth = 20 * rfx.MHz
 	// zigbeeWidth is the 802.15.4 channel width at 2.4 GHz.
 	zigbeeWidth = 2 * rfx.MHz
+	// fmNarrowWidth is the occupied bandwidth of 25 kHz-spaced FM voice
+	// (16K0F3E).
+	fmNarrowWidth = 16 * rfx.KHz
 )
 
 // Builtins returns a copy of the built-in band sets.
@@ -44,7 +57,25 @@ func Builtin(name string) *BandSet {
 	return nil
 }
 
-var builtins = []*BandSet{&wifi24, &wifi5, &fpv58, &zigbee, &murs, &gmrs}
+var builtins = []*BandSet{
+	&wifi24, &wifi5, &fpv58, &zigbee, &bluetooth,
+	&loraUS915, &loraEU868, &lpd433, &pmr446,
+	&murs, &gmrs, &marineVHF, &noaaWeather, &amateurVHF,
+}
+
+// spaced returns count channels named first, first+1, ... with centers
+// starting at start and step apart.
+func spaced(first, count int, start, step, width rfx.Frequency) []Channel {
+	chs := make([]Channel, count)
+	for i := range chs {
+		chs[i] = Channel{
+			Name:   strconv.Itoa(first + i),
+			Center: start + rfx.Frequency(i)*step,
+			Width:  width,
+		}
+	}
+	return chs
+}
 
 // numbered returns channels named "1", "2", ... at the given centers in MHz.
 func numbered(width rfx.Frequency, centersMHz ...int) []Channel {
@@ -65,7 +96,8 @@ var wifi24 = BandSet{
 }
 
 // wifi5 is the 5 GHz IEEE 802.11 channel plan (20 MHz channels), organized by
-// UNII sub-band. Channel numbers follow f = 5000 MHz + 5 MHz × n.
+// UNII sub-band. Channel numbers follow f = 5000 MHz + 5 MHz × n. Channel
+// 169 straddles the UNII-3/UNII-4 boundary at 5850 MHz.
 var wifi5 = BandSet{
 	Name: NameWiFi5,
 	Bands: []Band{
@@ -73,6 +105,7 @@ var wifi5 = BandSet{
 		{Name: "UNII-2A", Channels: wifi5Channels(52, 56, 60, 64)},
 		{Name: "UNII-2C", Channels: wifi5Channels(100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144)},
 		{Name: "UNII-3", Channels: wifi5Channels(149, 153, 157, 161, 165)},
+		{Name: "UNII-4", Channels: wifi5Channels(169, 173, 177)},
 	},
 }
 
@@ -113,17 +146,7 @@ var fpv58 = BandSet{
 var zigbee = BandSet{
 	Name: NameZigbee,
 	Bands: []Band{
-		{Name: "802.15.4", Channels: func() []Channel {
-			chs := make([]Channel, 16)
-			for i := range chs {
-				chs[i] = Channel{
-					Name:   strconv.Itoa(11 + i),
-					Center: 2405*rfx.MHz + rfx.Frequency(i)*5*rfx.MHz,
-					Width:  zigbeeWidth,
-				}
-			}
-			return chs
-		}()},
+		{Name: "802.15.4", Channels: spaced(11, 16, 2405*rfx.MHz, 5*rfx.MHz, zigbeeWidth)},
 	},
 }
 
@@ -184,5 +207,124 @@ var gmrs = BandSet{
 				{Name: "14", Center: 467_712_500, Width: 12_500},
 			},
 		},
+	},
+}
+
+// bluetooth is the 2.4 GHz Bluetooth channel plan. Bluetooth LE uses 40
+// channels at 2402 + 2k MHz; the advertising channels 37, 38 and 39 sit at
+// 2402, 2426 and 2480 MHz and the data channels fill the gaps. Bluetooth
+// Classic hops over 79 channels at 2402 + k MHz.
+var bluetooth = BandSet{
+	Name: NameBluetooth,
+	Bands: []Band{
+		{Name: "LE advertising", Channels: []Channel{
+			{Name: "37", Center: 2402 * rfx.MHz, Width: 2 * rfx.MHz},
+			{Name: "38", Center: 2426 * rfx.MHz, Width: 2 * rfx.MHz},
+			{Name: "39", Center: 2480 * rfx.MHz, Width: 2 * rfx.MHz},
+		}},
+		{Name: "LE data", Channels: append(
+			spaced(0, 11, 2404*rfx.MHz, 2*rfx.MHz, 2*rfx.MHz),
+			spaced(11, 26, 2428*rfx.MHz, 2*rfx.MHz, 2*rfx.MHz)...)},
+		{Name: "Classic", Channels: spaced(0, 79, 2402*rfx.MHz, rfx.MHz, rfx.MHz)},
+	},
+}
+
+// loraUS915 is the LoRaWAN US902-928 channel plan. Uplink channels 0–63 are
+// 125 kHz wide, 64–71 are 500 kHz wide; the eight downlink channels are
+// 500 kHz wide.
+var loraUS915 = BandSet{
+	Name: NameLoRaUS915,
+	Bands: []Band{
+		{Name: "Uplink 125 kHz", Channels: spaced(0, 64, 902_300*rfx.KHz, 200*rfx.KHz, 125*rfx.KHz)},
+		{Name: "Uplink 500 kHz", Channels: spaced(64, 8, 903_000*rfx.KHz, 1600*rfx.KHz, 500*rfx.KHz)},
+		{Name: "Downlink", Channels: spaced(0, 8, 923_300*rfx.KHz, 600*rfx.KHz, 500*rfx.KHz)},
+	},
+}
+
+// loraEU868 is the LoRaWAN EU863-870 channel plan: the three mandatory
+// channels, the five additional channels used by The Things Network, and the
+// RX2 downlink channel.
+var loraEU868 = BandSet{
+	Name: NameLoRaEU868,
+	Bands: []Band{
+		{Name: "Default", Channels: spaced(0, 3, 868_100*rfx.KHz, 200*rfx.KHz, 125*rfx.KHz)},
+		{Name: "Additional", Channels: spaced(3, 5, 867_100*rfx.KHz, 200*rfx.KHz, 125*rfx.KHz)},
+		{Name: "RX2", Channels: []Channel{{Name: "RX2", Center: 869_525 * rfx.KHz, Width: 125 * rfx.KHz}}},
+	},
+}
+
+// lpd433 is the European low-power device plan in the 433 MHz ISM band:
+// 69 channels 25 kHz apart from 433.075 MHz.
+var lpd433 = BandSet{
+	Name: NameLPD433,
+	Bands: []Band{
+		{Name: "LPD433", Channels: spaced(1, 69, 433_075*rfx.KHz, 25*rfx.KHz, 25*rfx.KHz)},
+	},
+}
+
+// pmr446 is the European license-free analog PMR446 plan: 16 channels
+// 12.5 kHz apart from 446.00625 MHz.
+var pmr446 = BandSet{
+	Name: NamePMR446,
+	Bands: []Band{
+		{Name: "PMR446", Channels: spaced(1, 16, 446_006_250, 12_500, 12_500)},
+	},
+}
+
+// marineVHF is the international maritime VHF plan. The ship band holds the
+// ship transmit frequency of channels 60, 01, 61, 02 ... 28, 88, 25 kHz
+// apart from 156.025 MHz; duplex channels have their coast transmit
+// frequency 4.6 MHz higher.
+var marineVHF = BandSet{
+	Name: NameMarineVHF,
+	Bands: []Band{
+		{Name: "Ship", Channels: func() []Channel {
+			chs := make([]Channel, 57)
+			for i := range chs {
+				n := 60 + i/2
+				if i%2 == 1 {
+					n = 1 + i/2
+				}
+				chs[i] = Channel{
+					Name:   fmt.Sprintf("%02d", n),
+					Center: 156_025*rfx.KHz + rfx.Frequency(i)*25*rfx.KHz,
+					Width:  fmNarrowWidth,
+				}
+			}
+			return chs
+		}()},
+		{Name: "AIS", Channels: []Channel{
+			{Name: "AIS 1", Center: 161_975 * rfx.KHz, Width: 25 * rfx.KHz},
+			{Name: "AIS 2", Center: 162_025 * rfx.KHz, Width: 25 * rfx.KHz},
+		}},
+	},
+}
+
+// noaaWeather is the NOAA Weather Radio plan: seven channels 25 kHz apart
+// from 162.400 MHz, numbered in the order used by most receivers.
+var noaaWeather = BandSet{
+	Name: NameNOAAWeather,
+	Bands: []Band{
+		{Name: "WX", Channels: []Channel{
+			{Name: "WX1", Center: 162_550 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX2", Center: 162_400 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX3", Center: 162_475 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX4", Center: 162_425 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX5", Center: 162_450 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX6", Center: 162_500 * rfx.KHz, Width: fmNarrowWidth},
+			{Name: "WX7", Center: 162_525 * rfx.KHz, Width: fmNarrowWidth},
+		}},
+	},
+}
+
+// amateurVHF covers the US amateur 2 m, 1.25 m and 70 cm allocations, each
+// as one channel, plus the North American APRS frequency.
+var amateurVHF = BandSet{
+	Name: NameAmateurVHF,
+	Bands: []Band{
+		{Name: "2 m", Channels: []Channel{{Name: "2 m", Center: 146 * rfx.MHz, Width: 4 * rfx.MHz}}},
+		{Name: "1.25 m", Channels: []Channel{{Name: "1.25 m", Center: 223_500 * rfx.KHz, Width: 3 * rfx.MHz}}},
+		{Name: "70 cm", Channels: []Channel{{Name: "70 cm", Center: 435 * rfx.MHz, Width: 30 * rfx.MHz}}},
+		{Name: "APRS", Channels: []Channel{{Name: "APRS", Center: 144_390 * rfx.KHz, Width: fmNarrowWidth}}},
 	},
 }

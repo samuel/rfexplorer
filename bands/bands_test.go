@@ -21,7 +21,11 @@ func TestBuiltinsValid(t *testing.T) {
 		}
 		names[bs.Name] = true
 	}
-	for _, n := range []string{NameWiFi24, NameWiFi5, NameFPV58, NameZigbee, NameMURS, NameGMRS} {
+	for _, n := range []string{
+		NameWiFi24, NameWiFi5, NameFPV58, NameZigbee, NameBluetooth,
+		NameLoRaUS915, NameLoRaEU868, NameLPD433, NamePMR446,
+		NameMURS, NameGMRS, NameMarineVHF, NameNOAAWeather, NameAmateurVHF,
+	} {
 		if Builtin(n) == nil {
 			t.Errorf("no builtin %q", n)
 		}
@@ -61,6 +65,44 @@ func TestBuiltinValues(t *testing.T) {
 	}
 	if len(Builtin(NameFPV58).Bands) != 10 {
 		t.Errorf("FPV bands = %d", len(Builtin(NameFPV58).Bands))
+	}
+	if ch := wifi5.Bands[4].Channels[2]; ch.Name != "177" || ch.Center != 5885*rfx.MHz {
+		t.Errorf("WiFi 177 = %+v", ch)
+	}
+}
+
+// TestBuiltinChannels checks the first and last channel of each band built
+// from a formula.
+func TestBuiltinChannels(t *testing.T) {
+	tests := []struct {
+		set         string
+		band        int
+		count       int
+		first, last Channel
+	}{
+		{NameZigbee, 0, 16, Channel{"11", 2405 * rfx.MHz, 2 * rfx.MHz}, Channel{"26", 2480 * rfx.MHz, 2 * rfx.MHz}},
+		{NameBluetooth, 0, 3, Channel{"37", 2402 * rfx.MHz, 2 * rfx.MHz}, Channel{"39", 2480 * rfx.MHz, 2 * rfx.MHz}},
+		{NameBluetooth, 1, 37, Channel{"0", 2404 * rfx.MHz, 2 * rfx.MHz}, Channel{"36", 2478 * rfx.MHz, 2 * rfx.MHz}},
+		{NameBluetooth, 2, 79, Channel{"0", 2402 * rfx.MHz, rfx.MHz}, Channel{"78", 2480 * rfx.MHz, rfx.MHz}},
+		{NameLoRaUS915, 0, 64, Channel{"0", 902_300 * rfx.KHz, 125 * rfx.KHz}, Channel{"63", 914_900 * rfx.KHz, 125 * rfx.KHz}},
+		{NameLoRaUS915, 1, 8, Channel{"64", 903_000 * rfx.KHz, 500 * rfx.KHz}, Channel{"71", 914_200 * rfx.KHz, 500 * rfx.KHz}},
+		{NameLoRaUS915, 2, 8, Channel{"0", 923_300 * rfx.KHz, 500 * rfx.KHz}, Channel{"7", 927_500 * rfx.KHz, 500 * rfx.KHz}},
+		{NameLoRaEU868, 1, 5, Channel{"3", 867_100 * rfx.KHz, 125 * rfx.KHz}, Channel{"7", 867_900 * rfx.KHz, 125 * rfx.KHz}},
+		{NameLPD433, 0, 69, Channel{"1", 433_075 * rfx.KHz, 25 * rfx.KHz}, Channel{"69", 434_775 * rfx.KHz, 25 * rfx.KHz}},
+		{NamePMR446, 0, 16, Channel{"1", 446_006_250, 12_500}, Channel{"16", 446_193_750, 12_500}},
+		{NameMarineVHF, 0, 57, Channel{"60", 156_025 * rfx.KHz, 16 * rfx.KHz}, Channel{"88", 157_425 * rfx.KHz, 16 * rfx.KHz}},
+	}
+	for _, tt := range tests {
+		chs := Builtin(tt.set).Bands[tt.band].Channels
+		if len(chs) != tt.count || chs[0] != tt.first || chs[len(chs)-1] != tt.last {
+			t.Errorf("%s band %d: %d channels, %+v .. %+v", tt.set, tt.band, len(chs), chs[0], chs[len(chs)-1])
+		}
+	}
+	marine := Builtin(NameMarineVHF).Bands[0].Channels
+	for _, ch := range marine {
+		if ch.Name == "16" && ch.Center != 156_800*rfx.KHz {
+			t.Errorf("marine 16 = %+v", ch)
+		}
 	}
 }
 
