@@ -34,4 +34,33 @@ func TestScreenImage(t *testing.T) {
 	if err := png.Encode(io.Discard, img); err != nil {
 		t.Fatal(err)
 	}
+
+	const lit, unlit = 0, 255
+	for _, c := range []struct {
+		x, y int
+		want uint8
+	}{
+		{0, 0, unlit},
+		{2, 7, lit}, // Data[2] = 0x80
+		{2, 6, unlit},
+		{16, 0, lit}, // Data[16] = 0xff
+		{16, 7, lit},
+		{127, 63, unlit},
+		{-1, 0, 0}, // out of bounds
+		{128, 0, 0},
+		{0, 64, 0},
+	} {
+		if got := img.AtGray(c.x, c.y).Y; got != c.want {
+			t.Errorf("AtGray(%d, %d) = %d, want %d", c.x, c.y, got, c.want)
+		}
+	}
+
+	// Pixels missing from a short image are unlit rather than a panic.
+	short := &ScreenImage{Data: img.Data[:10]}
+	if got := short.AtGray(2, 7).Y; got != lit {
+		t.Errorf("short AtGray(2, 7) = %d, want %d", got, lit)
+	}
+	if got := short.AtGray(100, 60).Y; got != unlit {
+		t.Errorf("short AtGray(100, 60) = %d, want %d", got, unlit)
+	}
 }

@@ -40,8 +40,6 @@ import (
 	"image/color"
 	"io"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -125,11 +123,6 @@ const (
 	ModulationPSKStd Modulation = 3
 	ModulationNone   Modulation = 0xff
 )
-
-func parseModulation(s string) Modulation {
-	i, _ := strconv.Atoi(s)
-	return Modulation(i)
-}
 
 type DSP byte
 
@@ -288,11 +281,17 @@ func (si *ScreenImage) At(x, y int) color.Color {
 	return si.AtGray(x, y)
 }
 
-// AtGray returns the color.Gray of the pixel at (x, y).
-// At(Bounds().Min.X, Bounds().Min.Y) returns the upper-left pixel of the grid.
-// At(Bounds().Max.X-1, Bounds().Max.Y-1) returns the lower-right one.
+// AtGray returns the color.Gray of the pixel at (x, y). Points outside the
+// bounds are black and pixels missing from Data are unlit.
 func (si *ScreenImage) AtGray(x, y int) color.Gray {
-	return color.Gray{Y: 255 ^ (255 * ((si.Data[(y/8)*128+x] >> (uint(y) % 8)) & 1))}
+	if !(image.Point{X: x, Y: y}).In(si.Bounds()) {
+		return color.Gray{}
+	}
+	i := (y/8)*128 + x
+	if i >= len(si.Data) {
+		return color.Gray{Y: 255}
+	}
+	return color.Gray{Y: 255 ^ (255 * ((si.Data[i] >> (uint(y) % 8)) & 1))}
 }
 
 // UnhandledPacket is the contents of an unhandled packet sent from RF Explorer.
@@ -304,6 +303,27 @@ func (p *UnhandledPacket) Type() string {
 	return "UnhandledPacket"
 }
 
+// CalibrationDataPacket is the embedded amplitude calibration table sent by
+// the device. The layout depends on the installed boards.
+type CalibrationDataPacket struct {
+	Data []byte
+}
+
+func (p *CalibrationDataPacket) Type() string {
+	return "CalibrationData"
+}
+
+// DecodeErrorPacket reports a frame that was recognized but malformed.
+type DecodeErrorPacket struct {
+	// Data is the frame without its terminator.
+	Data []byte
+	Err  error
+}
+
+func (p *DecodeErrorPacket) Type() string {
+	return "DecodeError"
+}
+
 // RawData is a packet of raw bytes sent from RF explorer as used by the sniffer.
 type RawData struct {
 	Data []byte
@@ -311,14 +331,6 @@ type RawData struct {
 
 func (p *RawData) Type() string {
 	return "RawData"
-}
-
-func parseASCIIDecimal(s string) int {
-	if s == "" {
-		return 0
-	}
-	i, _ := strconv.Atoi(strings.TrimLeft(s, "0"))
-	return i
 }
 
 func (m Model) String() string {
@@ -440,51 +452,6 @@ const (
 	BaudRate115200 BaudRate = 115200
 	BaudRate500000 BaudRate = 500000
 )
-
-func parseModel(m string) Model {
-	if m == "" {
-		return ModelNone
-	}
-	m = strings.TrimLeft(m, "0")
-	if m == "" {
-		return Model(0)
-	}
-	i, err := strconv.Atoi(m)
-	if err != nil {
-		return ModelInvalid
-	}
-	return Model(i)
-}
-
-func parseMode(m string) Mode {
-	if m == "" {
-		return ModeInvalid
-	}
-	m = strings.TrimLeft(m, "0")
-	if m == "" {
-		return Mode(0)
-	}
-	i, err := strconv.Atoi(m)
-	if err != nil {
-		return ModeInvalid
-	}
-	return Mode(i)
-}
-
-func parseCalculatorMode(m string) CalculatorMode {
-	if m == "" {
-		return CalculatorModeInvalid
-	}
-	m = strings.TrimLeft(m, "0")
-	if m == "" {
-		return CalculatorMode(0)
-	}
-	i, err := strconv.Atoi(m)
-	if err != nil {
-		return CalculatorModeInvalid
-	}
-	return CalculatorMode(i)
-}
 
 type Packet interface {
 	Type() string
@@ -861,14 +828,10 @@ func (r *RFExplorer) handlePacket(pkt Packet) {
 }
 
 func (r *RFExplorer) readLoop() {
-	buf := make([]byte, 8192)
-	off := 0
+	var f framer
+	buf := make([]byte, 4096)
 	for {
-		if off >= len(buf)-1 {
-			// TODO
-			off = 0
-		}
-		n, err := r.port.Read(buf[off:])
+		n, err := r.port.Read(buf)
 		if err != nil {
 			// TODO
 			log.Fatal(err)
@@ -878,304 +841,53 @@ func (r *RFExplorer) readLoop() {
 			return
 		default:
 		}
-		if n == 0 {
-			continue
-		}
-		off += n
-	decodeLoop:
-		for off > 2 {
-			// See if there's an EOL
-			eolIdx := bytes.Index(buf[:off], []byte{0x0d, 0x0a})
-			// The buffer is guaranteed to be at least 3 bytes long now
-			b := buf[:off]
-			handled := false
-			switch b[0] {
-			case '$':
-				// TODO: $C?
-				switch b[1] {
-				case 'q', 'Q':
-					// Embedded calibration data
-					// https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFExplorer.py#L1115
-
-					sourceStringSize := int(b[2])
-					if b[1] == 'Q' {
-						sourceStringSize += int(b[3]) << 8
-					}
-
-					// if (self.IsGenerator()):
-					//  	 #signal generator uses a different approach for storing absolute amplitude value offset over an ideal -30dBm response
-					//  	 if ((self.m_RFGenCal.GetCalSize() < 0) or (self.m_RFGenCal.GetCalSize() != nSourceStringSize)):
-					// 			sData = self.m_RFGenCal.InitializeCal(nSourceStringSize, sLine)
-					// 			print("Embedded calibration Signal Generator data received: " + sData, True)
-					// elif (self.m_eActiveModel == RFE_Common.eModel.MODEL_6G or self.m_eActiveModel == RFE_Common.eModel.MODEL_WSUB1G or self.m_eActiveModel == RFE_Common.eModel.MODEL_WSUB1G_PLUS or self.IsMWSUB3G):
-					// 	sData = "Embedded calibration Spectrum Analyzer data received:"
-					nStartPositionCalData := 0
-					nStopPositionCalData := sourceStringSize
-					switch r.ActiveModel() {
-					case Model6G:
-						nStartPositionCalData = posInternalCalibrated6G
-					case ModelWSUB1G:
-						nStartPositionCalData = posInternalCalibratedWSUB1G
-						nStopPositionCalData = posEndInternalCalibratedWSUB1G
-					case ModelWSUB1GPlus:
-						nStartPositionCalData = posInternalCalibratedWSUB1GPlus
-						nStopPositionCalData = posEndInternalCalibratedWSUB1GPlus
-					case ModelWSUB3G:
-						nStartPositionCalData = posInternalCalibratedMWSUB3G
-					}
-
-					if len(b) < nStopPositionCalData && eolIdx < nStopPositionCalData {
-						break decodeLoop
-					}
-
-					nAdjustSize := 3
-					if b[1] == 'Q' {
-						nAdjustSize = 4 // this accounts for extra byte sent in $Q for size
-					}
-					bAllZero := true
-					calOffsetDB := make([]float64, 0, nStopPositionCalData-nStartPositionCalData)
-					for i := nStartPositionCalData; i < nStopPositionCalData; i++ {
-						nVal := int8(b[i+nAdjustSize])
-						if nVal != 0 {
-							bAllZero = false
-						}
-						calOffsetDB = append(calOffsetDB, float64(nVal)/2.0) // split by two to get dB
-					}
-
-					r.mu.Lock()
-					r.spectrumAnalyzerEmbeddedCalibrationOffsetDB = calOffsetDB
-					r.mu.Unlock()
-
-					if bAllZero {
-						// TODO
-						fmt.Println("ERROR: the device internal calibration data is missing! contact support at www.rf-explorer.com/contact")
-					}
-
-					// TODO: r.handlePacket(...)
-					handled = true
-				case 'D':
-					if len(b) < 0x404 {
-						break decodeLoop
-					}
-					data := make([]byte, 0x400)
-					copy(data, b[2:0x402])
-					r.handlePacket(&ScreenImage{
-						Data: data,
-					})
-					eolIdx = 0x402
-					handled = true
-				case 'R':
-					// Raw data (used for sniffer)
-					nBytes := int(buf[2]) | (int(buf[3]) << 8)
-					if len(b) < nBytes+4 {
-						break decodeLoop
-					}
-					data := make([]byte, nBytes)
-					copy(data, b[4:4+nBytes])
-					r.handlePacket(&RawData{
-						Data: data,
-					})
-					eolIdx = 4 + nBytes
-					handled = true
-				case 'S':
-					// Sweep_data - $S<Sample_Steps> <AdBm>… <AdBm> <EOL> - Send all dBm sample points to PC client, in binary
-					if eolIdx < 0 {
-						break decodeLoop
-					}
-					if len(b) > 3 {
-						nSamples := int(b[2])
-						if len(b) < 3+nSamples {
-							// TODO: insert error into packet stream
-							fmt.Printf("SHORT\n")
-						} else {
-							if eolIdx < 3+nSamples {
-								eolIdx = 3 + nSamples
-								if eolIdx > len(b) {
-									// TODO: handle this better
-									fmt.Printf("LONG\n")
-									eolIdx = len(b)
-								}
-							}
-							samples := make([]float64, nSamples)
-							for i, adbm := range b[3 : 3+nSamples] {
-								// Sampled value in dBm, repeated n times one per sample. To get the real value in dBm, consider this an
-								// unsigned byte, divide it by two and change sign to negative. For instance a byte=0x11 (17 decimal)
-								// will be -17/2= -8.5dBm. This is now normalized and consistent for all modules and setups
-								samples[i] = -float64(adbm) / 2.0
-							}
-							r.handlePacket(&SweepDataPacket{
-								Samples: samples,
-							})
-							handled = true
-						}
-					}
-				case 'P':
-					// "$P " index:byte \x01 name:byte*12 \x00 \x00 minfreqkhz:uint32 maxfeqkhz:uint32 calcmode:byte amptop:int8 ampbottom:int8 calciter:byte mainboard:bool markermode:byte \x42 \x00
-					nameBytes := buf[5 : 5+12]
-					if ix := bytes.IndexByte(nameBytes, 0); ix >= 0 {
-						nameBytes = nameBytes[:ix]
-					}
-					r.handlePacket(&Preset{
-						Index:          int(buf[3]),
-						Name:           string(nameBytes),
-						MinFreqKHz:     int(binary.LittleEndian.Uint32(buf[19:23])),
-						MaxFreqKHz:     int(binary.LittleEndian.Uint32(buf[23:27])),
-						CalcMode:       CalculatorMode(buf[27]),
-						AmpTopDBm:      int(int8(buf[28])),
-						AmpBottomDBm:   int(int8(buf[29])),
-						CalcIterations: int(buf[30]),
-						Mainboard:      buf[31] != 0,
-						MarkerMode:     MarkerMode(buf[32]),
-					})
-					handled = true
-				}
-			case '#':
-				if eolIdx < 0 {
-					break decodeLoop
-				}
-				b = buf[:eolIdx]
-				// TODO: #QA:0 is received once on startup (TODO?)
-				// TODO: #K1 & #K0 -- thread tracking something or other
-
-				switch b[1] {
-				case 'C':
-					// TODO #C+ -- calculator mode set by software
-					if len(b) == 4 && b[2] == '+' {
-						// #C+{mode} - Calculator mode
-						calcMode := CalculatorMode(b[3])
-						r.mu.Lock()
-						r.calculatorMode = calcMode
-						r.mu.Unlock()
-						r.handlePacket(&CurrentCalculatorMode{Mode: calcMode})
-						handled = true
-					} else if len(b) > 6 {
-						switch b[2] {
-						case '2': // Spectrum Analyzer mode
-							if b[3] == '-' && b[5] == ':' {
-								switch b[4] {
-								case 'F':
-									// Current_config - #C2-F:<Start_Freq>, <Freq_Step>, <Amp_Top>, <Amp_Bottom>, <Sweep_Steps>,
-									//                  <ExpModuleActive>, <CurrentMode>, <Min_Freq>, <Max_Freq>, <Max_Span>, <RBW>,
-									//                  <AmpOffset>, <CalculatorMode> <EOL>
-									// Send current Spectrum Analyzer configuration data. From RFE to PC, will be used
-									// by the PC to control PC client GUI. Note this has been updated in v1.12
-									p := strings.Split(string(b[6:]), ",")
-									config := &CurrentConfigPacket{
-										StartFreqKHZ:    parseASCIIDecimal(p[0]),
-										FreqStepHZ:      parseASCIIDecimal(p[1]),
-										AmpTopDBM:       parseASCIIDecimal(p[2]),
-										AmpBottomDBM:    parseASCIIDecimal(p[3]),
-										SweepSteps:      parseASCIIDecimal(p[4]),
-										ExpModuleActive: p[5] == "1",
-										CurrentMode:     parseMode(p[6]),
-										MinFreqKHZ:      parseASCIIDecimal(p[7]),
-										MaxFreqKHZ:      parseASCIIDecimal(p[8]),
-										MaxSpan:         parseASCIIDecimal(p[9]),
-										RBWKHZ:          parseASCIIDecimal(p[10]),
-										AmpOffset:       parseASCIIDecimal(p[11]),
-										CalculatorMode:  parseCalculatorMode(p[12]),
-									}
-									r.mu.Lock()
-									if config.ExpModuleActive {
-										r.activeModel = r.expansionBoardModel
-									} else {
-										r.activeModel = r.mainBoardModel
-									}
-									r.calculatorMode = config.CalculatorMode
-									r.mu.Unlock()
-									r.handlePacket(config)
-									handled = true
-								case 'M':
-									// Current_Setup - #C2-M:<Main_Model>, <Expansion_Model>, <Firmware_Version> <EOL>
-									// Send current Spectrum Analyzer model setup and firmware version	1.06
-									p := strings.Split(string(b[6:]), ",")
-									setup := &CurrentSetupPacket{
-										// <Main_Model> - Codified values are 433M:0, 868M:1, 915M:2, WSUB1G:3, 2.4G:4, WSUB3G:5, 6G:6
-										Model: parseModel(p[0]),
-									}
-									// <Expansion_Model> - Codified values are 433M:0, 868M:1, 915M:2, WSUB1G:3, 2.4G:4, WSUB3G:5, 6G:6, NONE:255
-									if len(p) >= 2 {
-										setup.ExpansionModel = parseModel(p[1])
-									}
-									if len(p) >= 3 {
-										setup.FirmwareVersion = strings.TrimLeft(p[2], "0")
-									}
-
-									r.mu.Lock()
-									r.mainBoardModel = setup.Model
-									r.expansionBoardModel = setup.ExpansionModel
-									r.mu.Unlock()
-
-									r.handlePacket(setup)
-									handled = true
-								}
-							}
-						// case '3': // Signal generator CW, SweepFreq and SweepAmp modes // TODO: #C3- https://github.com/RFExplorer/RFExplorer-for-Python/blob/master/RFExplorer/RFEConfiguration.py#L136
-						// https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFExplorer.py#L1181
-						case '4': // Sniffer mode
-							// TODO: #C4- https://github.com/RFExplorer/RFExplorer-for-Python/blob/ea25c90c500bdc2b78b146903ce65ff97a0abe69/RFExplorer/RFEConfiguration.py#L269
-							// self.fStartMHZ = int(sLine[6:13]) / 1000.0 #note it comes in KHZ
-							// self.bExpansionBoardActive = (sLine[14] == '1')
-							// self.m_eMode = RFE_Common.eMode(int(sLine[16:19]))
-							// nDelay = int(sLine[20:25])
-							// self.nBaudrate = int(round(float(RFE_Common.CONST_FCY_CLOCK) / nDelay))   #FCY_CLOCK = 16 * 1000 * 1000
-							// self.eModulations = RFE_Common.eModulation(int(sLine[26:27]))
-							// ... use Modulation type
-							// self.fRBWKHZ = int(sLine[28:33])
-							// self.fThresholdDBM = (float)(-0.5 * float(sLine[34:37]))
-							if b[3] == '-' && b[4] == 'F' && b[5] == ':' {
-								p := strings.Split(string(b[6:]), ",")
-								r.handlePacket(&CurrentSnifferConfig{
-									StartFreqKHZ:    parseASCIIDecimal(p[0]),
-									ExpModuleActive: p[1] == "1",
-									CurrentMode:     parseMode(p[2]),
-									Delay:           parseASCIIDecimal(p[3]), // baudrate = (FCY_CLOCK=16*1000*1000)/delay,
-									Modulation:      parseModulation(p[4]),
-									RBWKHZ:          parseASCIIDecimal(p[5]),
-									ThresholdDBM:    -0.5 * float64(parseASCIIDecimal(p[6])),
-								})
-								handled = true
-							}
-						case 'A':
-							if b[3] == 'L' && b[4] == ':' {
-								r.handlePacket(&CalibrationAvailabilityPacket{
-									MainboardInternalCalibrationAvailable:      b[5] == '1',
-									ExpansionBoardInternalCalibrationAvailable: b[6] == '1',
-								})
-								handled = true
-							}
-						}
-					}
-				case 'S':
-					// Serial_Number - #Sn<SerialNumber> - device serial number
-					if b[2] == 'n' {
-						r.handlePacket(&SerialNumberPacket{SN: string(buf[3:eolIdx])})
-						handled = true
-					}
-				case 'P':
-					if len(b) >= 4 && string(b[:4]) == "#PCK" {
-						select {
-						case r.endOfPresetCh <- struct{}{}:
-						default:
-							fmt.Println("end of preset channel full")
-						}
-						r.handlePacket(&EndOfPresetsPacket{})
-						handled = true
-					}
-				}
-			}
-			if !handled && eolIdx >= 0 {
-				// Need to copy the data as we reuse the buffer
-				b2 := make([]byte, eolIdx)
-				copy(b2, b[:eolIdx])
-				r.handlePacket(&UnhandledPacket{Data: b2})
-				handled = true
-			}
-			if !handled {
+		f.Write(buf[:n])
+		for {
+			frame, ok := f.Next()
+			if !ok {
 				break
 			}
-			copy(buf, buf[eolIdx+2:])
-			off -= eolIdx + 2
+			pkt, err := decode(frame)
+			if err != nil {
+				pkt = &DecodeErrorPacket{Data: bytes.Clone(frame), Err: err}
+			}
+			r.updateState(pkt)
+			r.handlePacket(pkt)
+		}
+	}
+}
+
+// updateState tracks the device state reported by pkt.
+func (r *RFExplorer) updateState(pkt Packet) {
+	switch pkt := pkt.(type) {
+	case *CurrentCalculatorMode:
+		r.mu.Lock()
+		r.calculatorMode = pkt.Mode
+		r.mu.Unlock()
+	case *CurrentConfigPacket:
+		r.mu.Lock()
+		if pkt.ExpModuleActive {
+			r.activeModel = r.expansionBoardModel
+		} else {
+			r.activeModel = r.mainBoardModel
+		}
+		r.calculatorMode = pkt.CalculatorMode
+		r.mu.Unlock()
+	case *CurrentSetupPacket:
+		r.mu.Lock()
+		r.mainBoardModel = pkt.Model
+		r.expansionBoardModel = pkt.ExpansionModel
+		r.mu.Unlock()
+	case *CalibrationDataPacket:
+		r.mu.Lock()
+		r.spectrumAnalyzerEmbeddedCalibrationOffsetDB = calibrationOffsetsDB(r.activeModel, pkt.Data)
+		r.mu.Unlock()
+	case *EndOfPresetsPacket:
+		// Wake a pending UpdatePreset. A signal is already queued if nothing
+		// is waiting.
+		select {
+		case r.endOfPresetCh <- struct{}{}:
+		default:
 		}
 	}
 }
