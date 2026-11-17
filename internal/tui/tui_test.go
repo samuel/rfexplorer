@@ -6,8 +6,8 @@ import (
 
 	"github.com/gdamore/tcell/v3"
 	"github.com/gdamore/tcell/v3/vt"
+	"samuelks.com/bandplan"
 	"samuelks.com/rfx"
-	"samuelks.com/rfx/bands"
 	"samuelks.com/rfx/trace"
 )
 
@@ -24,8 +24,8 @@ func newTestTUI(t *testing.T, width, height int) *tui {
 	return &tui{
 		screen:       scr,
 		config:       rfx.SweepConfig{AmpTop: 0, AmpBottom: -100},
-		wifiChannels: channelsOf(bands.Builtin(bands.NameWiFi24)),
-		vtxChannels:  channelsOf(bands.Builtin(bands.NameFPV58)),
+		wifiChannels: channelsOf(bandplan.Builtin(bandplan.NameWiFi24)),
+		vtxChannels:  channelsOf(bandplan.Builtin(bandplan.NameFPV58)),
 	}
 }
 

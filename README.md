@@ -6,7 +6,6 @@ Go library and tools for RF Explorer handheld spectrum analyzers over serial.
 Documentation: https://pkg.go.dev/samuelks.com/rfx
 
 - `samuelks.com/rfx` — protocol library (repository root)
-- `bands` — channel plans (WiFi, FPV video, Zigbee, Bluetooth, LoRaWAN, LPD433, PMR446, MURS, GMRS, marine VHF, NOAA weather, amateur VHF/UHF) and custom band sets
 - `trace` — UI-independent sweep processing: max hold, linear-power averaging
   and channel power, peak search, waterfall images and color gradients
 - `record` — record serial traffic to a file and replay it as a stand-in device
@@ -124,7 +123,8 @@ Custom band sets
 
 `rfxui` merges the built-in band sets with
 `<user config dir>/rfexplorer/bands.json`; a set with the same name as a
-built-in replaces it. Frequencies are strings with a unit:
+built-in replaces it. Band sets come from `samuelks.com/bandplan`. Frequencies are
+strings with a unit:
 
 ```json
 [

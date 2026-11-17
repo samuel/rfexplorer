@@ -14,8 +14,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"samuelks.com/bandplan"
 	"samuelks.com/rfx"
-	"samuelks.com/rfx/bands"
 )
 
 var (
@@ -145,7 +145,7 @@ type presetEditor struct {
 	mainboardSwitch     *widget.Bool
 	calcModeDropdown    *enumDropdown
 	markerModeDropdown  *enumDropdown
-	bandSets            []*bands.BandSet
+	bandSets            []*bandplan.BandSet
 	bandSetDropdown     *enumDropdown
 
 	applyBtn  widget.Clickable
@@ -180,7 +180,7 @@ func newPresetEditor(maxPresets int) *presetEditor {
 
 // SetBandSets updates the available band sets shown in the channel overlay
 // dropdown. Call this once after loading band sets at startup.
-func (e *presetEditor) SetBandSets(sets []*bands.BandSet) {
+func (e *presetEditor) SetBandSets(sets []*bandplan.BandSet) {
 	labels := make([]string, 1+len(sets))
 	labels[0] = "(none)"
 	for i, bs := range sets {
@@ -393,8 +393,8 @@ func (e *presetEditor) Layout(gtx layout.Context, th *material.Theme) layout.Dim
 			if e.bandSetDropdown.Changed && e.bandSetDropdown.Selected > 0 {
 				bs := e.bandSets[e.bandSetDropdown.Selected-1]
 				lo, hi := bs.Span()
-				e.minFreqInput.SetText(formatMHz(lo))
-				e.maxFreqInput.SetText(formatMHz(hi))
+				e.minFreqInput.SetText(formatMHz(rfx.Frequency(lo)))
+				e.maxFreqInput.SetText(formatMHz(rfx.Frequency(hi)))
 			}
 			return dims
 		}, nil},

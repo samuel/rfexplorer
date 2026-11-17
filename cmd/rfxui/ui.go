@@ -25,8 +25,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+	"samuelks.com/bandplan"
 	"samuelks.com/rfx"
-	"samuelks.com/rfx/bands"
 )
 
 // defaultMargin is a margin applied in multiple places to give
@@ -132,7 +132,7 @@ type UI struct {
 	expModuleSwitch      *widget.Bool
 	presetEditor         *presetEditor
 	addPresetBtn         widget.Clickable
-	bandSets             []*bands.BandSet
+	bandSets             []*bandplan.BandSet
 	uiConfig             *UIConfig
 	saver                *configSaver
 	leftBg, leftFg       color.NRGBA
@@ -174,7 +174,7 @@ func NewUI(dev *rfx.Device, logger *slog.Logger) *UI {
 	}
 
 	// Load band sets: builtins merged with any user-defined sets.
-	var customSets []*bands.BandSet
+	var customSets []*bandplan.BandSet
 	if cfgDir, err := configDir(); err != nil {
 		ui.setStatus(fmt.Errorf("finding config directory: %w", err))
 	} else {
@@ -182,7 +182,7 @@ func NewUI(dev *rfx.Device, logger *slog.Logger) *UI {
 		ui.saver = newConfigSaver(path, func(err error) {
 			ui.post(func() { ui.setStatus(err) })
 		})
-		if custom, err := bands.LoadFile(filepath.Join(cfgDir, "bands.json")); err != nil {
+		if custom, err := bandplan.LoadFile(filepath.Join(cfgDir, "bands.json")); err != nil {
 			ui.setStatus(fmt.Errorf("loading custom band sets: %w", err))
 		} else {
 			customSets = custom
@@ -193,7 +193,7 @@ func NewUI(dev *rfx.Device, logger *slog.Logger) *UI {
 			ui.uiConfig = cfg
 		}
 	}
-	ui.bandSets = bands.MergeSets(bands.Builtins(), customSets)
+	ui.bandSets = bandplan.MergeSets(bandplan.Builtins(), customSets)
 	ui.presetEditor.SetBandSets(ui.bandSets)
 	return ui
 }
@@ -309,7 +309,7 @@ func (ui *UI) saveUIConfig() {
 
 // setOverlay shows the named band set, or none if name is empty.
 func (ui *UI) setOverlay(name string) {
-	ui.ChannelOverview.SetBandSet(bands.Find(ui.bandSets, name))
+	ui.ChannelOverview.SetBandSet(bandplan.Find(ui.bandSets, name))
 }
 
 // formatMHz formats a frequency in MHz to the nearest kHz.

@@ -12,8 +12,8 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
+	"samuelks.com/bandplan"
 	"samuelks.com/rfx"
-	"samuelks.com/rfx/bands"
 	"samuelks.com/rfx/trace"
 )
 
@@ -30,7 +30,7 @@ type ChannelOverviewWidget struct {
 	selectedChan int
 	clicks       [][]gesture.Click
 	min, max     float64
-	bandSet      *bands.BandSet
+	bandSet      *bandplan.BandSet
 	sweep        rfx.Sweep
 	maxHold      trace.MaxHold
 	spanLo       rfx.Frequency
@@ -46,14 +46,15 @@ func NewChannelOverviewWidget() *ChannelOverviewWidget {
 	}
 }
 
-func (cw *ChannelOverviewWidget) SetBandSet(bs *bands.BandSet) {
+func (cw *ChannelOverviewWidget) SetBandSet(bs *bandplan.BandSet) {
 	cw.bandSet = bs
 	cw.maxHold.Reset()
 	if bs == nil {
 		cw.clicks = nil
 		cw.spanLo, cw.spanHi = 0, 0
 	} else {
-		cw.spanLo, cw.spanHi = bs.Span()
+		lo, hi := bs.Span()
+		cw.spanLo, cw.spanHi = rfx.Frequency(lo), rfx.Frequency(hi)
 		cw.clicks = make([][]gesture.Click, len(bs.Bands))
 		for bi, band := range bs.Bands {
 			cw.clicks[bi] = make([]gesture.Click, len(band.Channels))
@@ -95,16 +96,18 @@ func (cw *ChannelOverviewWidget) SelectedRange() (lo, hi rfx.Frequency, ok bool)
 		return 0, 0, false
 	}
 	ch := band.Channels[cw.selectedChan]
-	return ch.Low(), ch.High(), true
+	lo, hi = channelEdges(ch)
+	return lo, hi, true
 }
 
 // channelLevels returns the peak level of every channel in the latest sweep
 // and in the max-hold trace, using ampMin where a channel is outside the
 // sweep.
-func (cw *ChannelOverviewWidget) channelLevels(bs *bands.BandSet, ampMin float64) (current, held [][]float64) {
+func (cw *ChannelOverviewWidget) channelLevels(bs *bandplan.BandSet, ampMin float64) (current, held [][]float64) {
 	maxTrace := cw.maxHold.Trace()
-	level := func(s *rfx.Sweep, ch bands.Channel) float64 {
-		if _, v, ok := trace.Peak(s, ch.Low(), ch.High()); ok {
+	level := func(s *rfx.Sweep, ch bandplan.Channel) float64 {
+		lo, hi := channelEdges(ch)
+		if _, v, ok := trace.Peak(s, lo, hi); ok {
 			return float64(v)
 		}
 		return ampMin
@@ -220,8 +223,9 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 				break
 			}
 
-			leftX := int((ch.Low() - spanLo) * rfx.Frequency(w) / span)
-			rightX := int((ch.High() - spanLo) * rfx.Frequency(w) / span)
+			lo, hi := channelEdges(ch)
+			leftX := int((lo - spanLo) * rfx.Frequency(w) / span)
+			rightX := int((hi - spanLo) * rfx.Frequency(w) / span)
 			if rightX <= leftX {
 				rightX = leftX + 1
 			}
@@ -336,4 +340,9 @@ func (cw *ChannelOverviewWidget) Layout(gtx layout.Context, th *material.Theme) 
 	}
 
 	return layout.Dimensions{Size: image.Pt(w, totalH)}
+}
+
+// channelEdges returns a channel's edges as sweep frequencies.
+func channelEdges(ch bandplan.Channel) (lo, hi rfx.Frequency) {
+	return rfx.Frequency(ch.Low()), rfx.Frequency(ch.High())
 }

@@ -13,8 +13,8 @@ import (
 
 	"github.com/gdamore/tcell/v3"
 	"github.com/gdamore/tcell/v3/color"
+	"samuelks.com/bandplan"
 	"samuelks.com/rfx"
-	"samuelks.com/rfx/bands"
 	"samuelks.com/rfx/trace"
 )
 
@@ -51,12 +51,12 @@ type Options struct {
 
 // namedChannel is a channel labeled with its band, such as "A1".
 type namedChannel struct {
-	bands.Channel
+	bandplan.Channel
 	name string
 }
 
 // channelsOf flattens a band set into channels named band + channel.
-func channelsOf(bs *bands.BandSet) []namedChannel {
+func channelsOf(bs *bandplan.BandSet) []namedChannel {
 	var chs []namedChannel
 	for _, b := range bs.Bands {
 		for _, c := range b.Channels {
@@ -128,8 +128,8 @@ func Run(ctx context.Context, dev *rfx.Device, opts Options) (err error) {
 		results:      make(chan error, 8),
 		config:       dev.Config(),
 		lcdEnabled:   true,
-		wifiChannels: channelsOf(bands.Builtin(bands.NameWiFi24)),
-		vtxChannels:  channelsOf(bands.Builtin(bands.NameFPV58)),
+		wifiChannels: channelsOf(bandplan.Builtin(bandplan.NameWiFi24)),
+		vtxChannels:  channelsOf(bandplan.Builtin(bandplan.NameFPV58)),
 	}
 	return t.loop(ctx)
 }
@@ -410,7 +410,7 @@ func (t *tui) drawTrace(s *rfx.Sweep, left, plotW, bottom int, ampToY func(float
 	if t.vtx {
 		var names []string
 		for _, c := range t.vtxChannels {
-			if c.Contains(peakFreq) {
+			if c.Contains(bandplan.Frequency(peakFreq)) {
 				names = append(names, c.name)
 			}
 		}
@@ -427,7 +427,7 @@ func (t *tui) drawChannels(s *rfx.Sweep, left, plotW, bottom int, ampToY func(fl
 	best, bestPower := -1, 0.0
 	for i, c := range channels {
 		startX := left + i*barWidth
-		if p, ok := trace.ChannelPower(s, c.Center, c.Width, trace.WindowBlackman); ok {
+		if p, ok := trace.ChannelPower(s, rfx.Frequency(c.Center), rfx.Frequency(c.Width), trace.WindowBlackman); ok {
 			if best < 0 || p > bestPower {
 				best, bestPower = i, p
 			}

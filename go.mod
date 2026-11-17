@@ -7,6 +7,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/gdamore/tcell/v3 v3.6.0
 	go.bug.st/serial v1.8.0
+	samuelks.com/bandplan v0.0.0-20261117211252-0dd70b03a140
 )
 
 require (
