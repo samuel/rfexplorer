@@ -22,6 +22,15 @@
 // [Device.SelectModule], return the configuration the device reports
 // afterwards. A wait that runs out returns an error matching [ErrTimeout].
 //
+// # Boards
+//
+// A device has a main RF board and may have an expansion board.
+// [Device.Boards] lists them with their frequency limits, as reported by
+// the device once a board has been selected or else the model's published
+// limits. [Device.SetSweep] keeps the active board when it can sweep the
+// requested range and otherwise selects one that can; a range no board can
+// sweep is a [*RangeError].
+//
 // # Messages
 //
 // Everything the device sends is delivered to subscribers as a [Message].

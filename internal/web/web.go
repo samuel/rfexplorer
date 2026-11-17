@@ -70,19 +70,25 @@ type (
 		MaxPresets int    `json:"max_presets"`
 	}
 	configMsg struct {
-		Type       string `json:"type"` // "config"
-		Start      int64  `json:"start"`
-		Stop       int64  `json:"stop"`
-		Step       int64  `json:"step"`
-		Points     int    `json:"points"`
-		AmpTop     int    `json:"amp_top"`
-		AmpBottom  int    `json:"amp_bottom"`
-		RBW        int64  `json:"rbw"`
-		Calculator string `json:"calculator"`
-		Module     string `json:"module"`
-		MinFreq    int64  `json:"min_freq"`
-		MaxFreq    int64  `json:"max_freq"`
-		MaxSpan    int64  `json:"max_span"`
+		Type       string     `json:"type"` // "config"
+		Start      int64      `json:"start"`
+		Stop       int64      `json:"stop"`
+		Step       int64      `json:"step"`
+		Points     int        `json:"points"`
+		AmpTop     int        `json:"amp_top"`
+		AmpBottom  int        `json:"amp_bottom"`
+		RBW        int64      `json:"rbw"`
+		Calculator string     `json:"calculator"`
+		Module     string     `json:"module"`
+		Boards     []boardMsg `json:"boards"`
+	}
+	boardMsg struct {
+		Module   string `json:"module"`
+		Model    string `json:"model"`
+		MinFreq  int64  `json:"min_freq"` // zero if unknown
+		MaxFreq  int64  `json:"max_freq"`
+		MaxSpan  int64  `json:"max_span"`
+		Reported bool   `json:"reported"`
 	}
 	sweepMsg struct {
 		Type    string    `json:"type"` // "sweep"
@@ -119,7 +125,18 @@ func newInfoMsg(info rfx.DeviceInfo) infoMsg {
 	}
 }
 
-func newConfigMsg(c rfx.SweepConfig) configMsg {
+func newConfigMsg(c rfx.SweepConfig, boards []rfx.Board) configMsg {
+	bm := make([]boardMsg, len(boards))
+	for i, b := range boards {
+		bm[i] = boardMsg{
+			Module:   b.Module.String(),
+			Model:    b.Model.String(),
+			MinFreq:  int64(b.Min),
+			MaxFreq:  int64(b.Max),
+			MaxSpan:  int64(b.MaxSpan),
+			Reported: b.Reported,
+		}
+	}
 	return configMsg{
 		Type:       "config",
 		Start:      int64(c.Start),
@@ -131,9 +148,7 @@ func newConfigMsg(c rfx.SweepConfig) configMsg {
 		RBW:        int64(c.RBW),
 		Calculator: c.Calculator.String(),
 		Module:     c.Module().String(),
-		MinFreq:    int64(c.MinFreq),
-		MaxFreq:    int64(c.MaxFreq),
-		MaxSpan:    int64(c.MaxSpan),
+		Boards:     bm,
 	}
 }
 
@@ -148,7 +163,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, struct {
 		Info   infoMsg   `json:"info"`
 		Config configMsg `json:"config"`
-	}{newInfoMsg(s.dev.Info()), newConfigMsg(s.dev.Config())})
+	}{newInfoMsg(s.dev.Info()), newConfigMsg(s.dev.Config(), s.dev.Boards())})
 }
 
 func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +211,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err := send(newInfoMsg(s.dev.Info())); err != nil {
 		return
 	}
-	if err := send(newConfigMsg(s.dev.Config())); err != nil {
+	if err := send(newConfigMsg(s.dev.Config(), s.dev.Boards())); err != nil {
 		return
 	}
 	for {
@@ -220,7 +235,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			case *rfx.Sweep:
 				v = sweepMsg{Type: "sweep", Start: int64(msg.Start), Step: int64(msg.Step), Samples: msg.Samples}
 			case *rfx.SweepConfig:
-				v = newConfigMsg(*msg)
+				v = newConfigMsg(*msg, s.dev.Boards())
 			default:
 				continue
 			}

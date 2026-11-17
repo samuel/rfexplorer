@@ -89,6 +89,7 @@ type Device struct {
 	mu          sync.RWMutex
 	err         error
 	info        DeviceInfo
+	boards      [2]Board // indexed by Module
 	config      SweepConfig
 	sniffer     SnifferConfig
 	sniffing    bool
@@ -170,6 +171,10 @@ func New(ctx context.Context, port io.ReadWriteCloser) (*Device, error) {
 		readerDone: make(chan struct{}),
 		txReady:    make(chan struct{}, 1),
 		info:       DeviceInfo{Main: ModelNone, Expansion: ModelNone},
+		boards: [2]Board{
+			{Module: ModuleMain, Model: ModelNone},
+			{Module: ModuleExpansion, Model: ModelNone},
+		},
 	}
 	d.wg.Add(1)
 	go d.readLoop()
@@ -256,10 +261,76 @@ func (d *Device) ActiveModel() Model {
 }
 
 func (d *Device) activeModelLocked() Model {
-	if d.config.ExpansionActive {
-		return d.info.Expansion
+	return d.boards[d.activeModuleLocked()].Model
+}
+
+func (d *Device) activeModuleLocked() Module {
+	expansion := d.config.ExpansionActive
+	if d.sniffing {
+		expansion = d.sniffer.ExpansionActive
 	}
-	return d.info.Main
+	if expansion {
+		return ModuleExpansion
+	}
+	return ModuleMain
+}
+
+// Boards returns the installed RF boards, main board first, with the limits
+// last reported by the device or else the model's published limits.
+func (d *Device) Boards() []Board {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.boardsLocked()
+}
+
+func (d *Device) boardsLocked() []Board {
+	var boards []Board
+	for _, b := range d.boards {
+		if b.installed() {
+			boards = append(boards, b)
+		}
+	}
+	return boards
+}
+
+// BoardFor returns the board that SetSweep would use for the range: the
+// active board if it can sweep it, else another board that can. It returns
+// a *RangeError if no board can.
+func (d *Device) BoardFor(start, stop Frequency) (Board, error) {
+	return d.pickBoard(start, stop, func(b Board) bool { return b.Covers(start, stop) })
+}
+
+func (d *Device) pickBoard(start, stop Frequency, ok func(Board) bool) (Board, error) {
+	d.mu.RLock()
+	boards := d.boardsLocked()
+	active := d.activeModuleLocked()
+	d.mu.RUnlock()
+	if b, found := pickBoard(boards, active, ok); found {
+		return b, nil
+	}
+	return Board{}, &RangeError{Start: start, Stop: stop, Boards: boards}
+}
+
+// useBoard selects b's module if it isn't active. The device ignores module
+// changes in WiFi and sniffer mode, so those are errors. reqMu must be held.
+func (d *Device) useBoard(ctx context.Context, b Board) error {
+	d.mu.RLock()
+	active := d.activeModuleLocked()
+	wifi := d.config.Mode == ModeWifiAnalyzer
+	sniffing := d.sniffing
+	d.mu.RUnlock()
+	switch {
+	case active == b.Module:
+		return nil
+	case sniffing:
+		return fmt.Errorf("rfx: the %s board can't be selected in sniffer mode", b.Model)
+	case wifi:
+		return fmt.Errorf("rfx: the %s board can't be selected in WiFi mode", b.Model)
+	}
+	if _, err := d.selectModuleLocked(ctx, b.Module); err != nil {
+		return fmt.Errorf("rfx: selecting the %s board: %w", b.Model, err)
+	}
+	return nil
 }
 
 // Sniffer returns the sniffer configuration the device last reported, and
@@ -334,7 +405,9 @@ type SweepRequest struct {
 
 // SetSweep changes the frequency range and displayed amplitude range and
 // returns the configuration the device reports afterwards, which may differ
-// from the request.
+// from the request. It keeps the active board if it can sweep the range and
+// otherwise selects one that can (see BoardFor), which takes a few seconds.
+// A range no board can sweep is a *RangeError.
 func (d *Device) SetSweep(ctx context.Context, req SweepRequest) (SweepConfig, error) {
 	// #<Size>C2-F:<Start_Freq>,<End_Freq>,<Amp_Top>,<Amp_Bottom>[,<RBW_KHZ>]
 	// <Start_Freq>, <End_Freq> = 7 ascii digits, decimal kHz
@@ -348,6 +421,16 @@ func (d *Device) SetSweep(ctx context.Context, req SweepRequest) (SweepConfig, e
 	}
 	startKHz, stopKHz := int(req.Start/KHz), int(req.Stop/KHz)
 
+	d.reqMu.Lock()
+	defer d.reqMu.Unlock()
+	b, err := d.BoardFor(req.Start, req.Stop)
+	if err != nil {
+		return SweepConfig{}, err
+	}
+	if err := d.useBoard(ctx, b); err != nil {
+		return SweepConfig{}, err
+	}
+
 	var rbw string
 	if rbwKHz := int(req.RBW / KHz); rbwKHz >= 3 && rbwKHz <= 670 {
 		points := min(max((stopKHz-startKHz+rbwKHz/2)/rbwKHz, 112), MaxSweepPoints)
@@ -357,8 +440,6 @@ func (d *Device) SetSweep(ctx context.Context, req SweepRequest) (SweepConfig, e
 		}
 	}
 
-	d.reqMu.Lock()
-	defer d.reqMu.Unlock()
 	cfg := d.Config()
 	// The device reports a step size rather than the stop frequency.
 	stop := int(cfg.Stop() / KHz)
@@ -378,21 +459,43 @@ func (d *Device) SelectModule(ctx context.Context, m Module) (SweepConfig, error
 	}
 	d.reqMu.Lock()
 	defer d.reqMu.Unlock()
+	return d.selectModuleLocked(ctx, m)
+}
+
+// selectModuleLocked switches to module m. reqMu must be held.
+func (d *Device) selectModuleLocked(ctx context.Context, m Module) (SweepConfig, error) {
 	cfg := d.Config()
 	return d.configCommand(ctx, []byte{'C', 'M', byte(m)}, cfg.Module() != m, true, func(c *SweepConfig) bool {
 		return c.Module() == m
 	})
 }
 
-// SetWifiMode enables or disables the WiFi analyzer. While it is enabled the
-// device ignores SetSweep and SetCalculator. Leaving WiFi mode does not
-// restore the previous frequency range or calculator mode.
+// wifiBands are the frequency limits of the WiFi analyzer bands.
+var wifiBands = map[WifiMode][2]Frequency{
+	Wifi24GHz: {2401 * MHz, 2495 * MHz},
+	Wifi5GHz:  {5170 * MHz, 5835 * MHz},
+}
+
+// SetWifiMode enables or disables the WiFi analyzer. Enabling it selects a
+// board that covers the band if the active one doesn't, which can't be done
+// while WiFi mode is already enabled. While it is enabled the device ignores
+// SetSweep and SetCalculator. Leaving WiFi mode does not restore the
+// previous frequency range or calculator mode.
 func (d *Device) SetWifiMode(ctx context.Context, mode WifiMode) (SweepConfig, error) {
 	if mode > Wifi5GHz {
 		return SweepConfig{}, fmt.Errorf("rfx: invalid WiFi mode %d", mode)
 	}
 	d.reqMu.Lock()
 	defer d.reqMu.Unlock()
+	if band, ok := wifiBands[mode]; ok {
+		b, err := d.pickBoard(band[0], band[1], func(b Board) bool { return b.Contains(band[0]) && b.Contains(band[1]) })
+		if err != nil {
+			return SweepConfig{}, err
+		}
+		if err := d.useBoard(ctx, b); err != nil {
+			return SweepConfig{}, err
+		}
+	}
 	enabled := d.Config().Mode == ModeWifiAnalyzer
 	// The mode is an ASCII digit. Firmware 1.34 ignores a zero byte, so the
 	// raw value can't disable the analyzer.
@@ -497,9 +600,10 @@ type SnifferRequest struct {
 // captures as RawData messages, and returns the configuration it reports.
 // The command format comes from captures of the reference client.
 //
-// On a 6G + WSUB3G with firmware 1.34 it works only while the WSUB3G is
-// selected; with the 6G board active the device ignores it and SetSniffer
-// returns ErrNotApplied. In sniffer mode the device ignores SetSweep and
+// It selects a board that covers the frequency if the active one doesn't. On
+// a 6G + WSUB3G with firmware 1.34 it works only with the WSUB3G; with the
+// 6G board active the device ignores it and SetSniffer returns
+// ErrNotApplied. In sniffer mode the device ignores SetSweep and
 // SelectModule, so leave it from the device's menu. After Hold, or after the
 // port was closed and reopened, the device stopped answering commands until
 // it was reset from its menu.
@@ -525,6 +629,13 @@ func (d *Device) SetSniffer(ctx context.Context, req SnifferRequest) (SnifferCon
 	}
 	d.reqMu.Lock()
 	defer d.reqMu.Unlock()
+	b, err := d.pickBoard(req.Frequency, req.Frequency, func(b Board) bool { return b.Contains(req.Frequency) })
+	if err != nil {
+		return SnifferConfig{}, err
+	}
+	if err := d.useBoard(ctx, b); err != nil {
+		return SnifferConfig{}, err
+	}
 	msg, err := d.echoCommand(ctx, []byte(cmd), func(msg Message) bool {
 		c, ok := msg.(*SnifferConfig)
 		return ok && applied(c)
@@ -592,15 +703,36 @@ func (d *Device) Presets(ctx context.Context) ([]Preset, error) {
 }
 
 // WritePreset stores a preset on the device and waits for it to be
-// acknowledged.
+// acknowledged. It first checks the preset with CheckPreset.
 func (d *Device) WritePreset(ctx context.Context, p Preset) error {
+	if err := d.CheckPreset(p); err != nil {
+		return err
+	}
+	return d.writePreset(ctx, &p)
+}
+
+// CheckPreset reports whether WritePreset would accept p: it must be valid,
+// fit the device's slots, and lie within the limits the device reported
+// for its board (a *RangeError otherwise). Published limits are not used
+// because they leave out licensed ranges.
+func (d *Device) CheckPreset(p Preset) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
 	if err := d.checkPresetIndex(p.Index); err != nil {
 		return err
 	}
-	return d.writePreset(ctx, &p)
+	m := ModuleExpansion
+	if p.Mainboard {
+		m = ModuleMain
+	}
+	d.mu.RLock()
+	b := d.boards[m]
+	d.mu.RUnlock()
+	if b.Reported && !b.Covers(p.Start, p.Stop) {
+		return &RangeError{Start: p.Start, Stop: p.Stop, Boards: []Board{b}}
+	}
+	return nil
 }
 
 // DeletePreset clears the preset slot at index and waits for it to be
@@ -951,6 +1083,10 @@ func (d *Device) updateState(msg Message) {
 		d.mu.Lock()
 		d.config = *msg
 		d.sniffing = false
+		if msg.MaxFreq > 0 {
+			b := &d.boards[msg.Module()]
+			b.Min, b.Max, b.MaxSpan, b.Reported = msg.MinFreq, msg.MaxFreq, msg.MaxSpan, true
+		}
 		d.mu.Unlock()
 	case *SnifferConfig:
 		d.mu.Lock()
@@ -975,6 +1111,10 @@ func (d *Device) updateState(msg Message) {
 		d.mu.Lock()
 		msg.Serial = d.info.Serial
 		d.info = *msg
+		if !msg.Main.IsGenerator() {
+			d.boards[ModuleMain].setModel(msg.Main)
+			d.boards[ModuleExpansion].setModel(msg.Expansion)
+		}
 		d.mu.Unlock()
 	case *SerialNumber:
 		d.mu.Lock()

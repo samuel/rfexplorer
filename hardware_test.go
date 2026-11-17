@@ -87,6 +87,29 @@ func TestHardware(t *testing.T) {
 	}
 	waitSweeps(2, cfg)
 
+	// Sweeping the middle of each board selects it.
+	for _, b := range dev.Boards() {
+		t.Logf("board %s", b)
+		if !b.Known() {
+			continue
+		}
+		span := min(b.MaxSpan, b.Max-b.Min) / 2
+		start := (b.Min+b.Max)/2 - span/2
+		cfg, err := dev.SetSweep(ctx, rfx.SweepRequest{Start: start, Stop: start + span, AmpTop: orig.AmpTop, AmpBottom: orig.AmpBottom})
+		if err != nil {
+			t.Errorf("sweep on %s: %s", b.Model, err)
+			continue
+		}
+		if cfg.Module() != b.Module {
+			t.Errorf("sweep on %s: %s board active", b.Model, cfg.Module())
+		}
+		waitSweeps(2, cfg)
+		if minFreq, maxFreq, maxSpan, ok := b.Model.Range(); ok && (cfg.MinFreq != minFreq || cfg.MaxFreq != maxFreq || cfg.MaxSpan != maxSpan) {
+			t.Logf("%s reports %s to %s, max span %s; published %s to %s, max span %s",
+				b.Model, cfg.MinFreq, cfg.MaxFreq, cfg.MaxSpan, minFreq, maxFreq, maxSpan)
+		}
+	}
+
 	if err := dev.SetCalculator(ctx, rfx.CalculatorMaxHold); err != nil {
 		t.Errorf("set calculator: %s", err)
 	}

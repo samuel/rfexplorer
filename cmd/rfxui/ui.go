@@ -129,7 +129,7 @@ type UI struct {
 	presetList           *widget.List
 	presetClicks         []gesture.Click
 	lcdSwitch            *widget.Bool
-	expModuleSwitch      *widget.Bool
+	boardEnum            *widget.Enum // value is the selected Module's name
 	presetEditor         *presetEditor
 	addPresetBtn         widget.Clickable
 	bandSets             []*bandplan.BandSet
@@ -163,7 +163,7 @@ func NewUI(dev *rfx.Device, logger *slog.Logger) *UI {
 		maxPresets: maxPresets,
 		// The LCD state can't be read from the device; it starts on.
 		lcdSwitch:            &widget.Bool{Value: true},
-		expModuleSwitch:      &widget.Bool{},
+		boardEnum:            &widget.Enum{},
 		presetEditor:         newPresetEditor(maxPresets),
 		centerFrequencyInput: &widget.Editor{SingleLine: true, Submit: true},
 		frequencySpanInput:   &widget.Editor{SingleLine: true, Submit: true},
@@ -289,7 +289,7 @@ func (ui *UI) handleMessage(msg rfx.Message) {
 
 func (ui *UI) setConfig(cfg rfx.SweepConfig) {
 	ui.config = cfg
-	ui.expModuleSwitch.Value = cfg.ExpansionActive
+	ui.boardEnum.Value = cfg.Module().String()
 	ui.Spectrum.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
 	ui.ChannelOverview.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
 	ui.Waterfall.SetAmplitude(cfg.AmpBottom, cfg.AmpTop)
@@ -537,17 +537,17 @@ func (ui *UI) handleControls(gtx layout.Context) {
 		on := ui.lcdSwitch.Value
 		ui.do("set LCD", func(ctx context.Context) error { return ui.dev.SetLCD(ctx, on) }, nil)
 	}
-	if ui.expModuleSwitch.Update(gtx) {
+	if ui.boardEnum.Update(gtx) {
 		module := rfx.ModuleMain
-		if ui.expModuleSwitch.Value {
+		if ui.boardEnum.Value == rfx.ModuleExpansion.String() {
 			module = rfx.ModuleExpansion
 		}
-		ui.do("switch module", func(ctx context.Context) error {
+		ui.do("switch board", func(ctx context.Context) error {
 			_, err := ui.dev.SelectModule(ctx, module)
 			return err
 		}, func(err error) {
 			if err != nil {
-				ui.expModuleSwitch.Value = ui.config.ExpansionActive
+				ui.boardEnum.Value = ui.config.Module().String()
 			}
 		})
 	}
@@ -609,6 +609,28 @@ func (ui *UI) LayoutMain(th *material.Theme, gtx layout.Context) layout.Dimensio
 	)
 }
 
+// layoutBoards shows a choice of RF board when the device has two.
+func (ui *UI) layoutBoards(gtx layout.Context, th *material.Theme) layout.Dimensions {
+	boards := ui.dev.Boards()
+	if len(boards) < 2 {
+		return layout.Dimensions{}
+	}
+	children := []layout.FlexChild{layout.Rigid(material.Body2(th, "RF Board").Layout)}
+	for _, b := range boards {
+		children = append(children, layout.Rigid(material.RadioButton(th, ui.boardEnum, b.Module.String(), boardLabel(b)).Layout))
+	}
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
+}
+
+// boardLabel names a board and its frequency range, such as
+// "6G 4850–6100 MHz".
+func boardLabel(b rfx.Board) string {
+	if !b.Known() {
+		return b.Model.String()
+	}
+	return fmt.Sprintf("%s %s–%s MHz", b.Model, strconv.FormatFloat(b.Min.MHz(), 'f', -1, 64), strconv.FormatFloat(b.Max.MHz(), 'f', -1, 64))
+}
+
 func (ui *UI) layoutSidebar(gtx layout.Context, th *material.Theme) layout.Dimensions {
 	switchRow := func(sw *widget.Bool, label string) layout.Widget {
 		return func(gtx layout.Context) layout.Dimensions {
@@ -632,7 +654,9 @@ func (ui *UI) layoutSidebar(gtx layout.Context, th *material.Theme) layout.Dimen
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 		layout.Rigid(switchRow(ui.lcdSwitch, "LCD On")),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
-		layout.Rigid(switchRow(ui.expModuleSwitch, "Expansion Module")),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return ui.layoutBoards(gtx, th)
+		}),
 		layout.Rigid(layout.Spacer{Height: unit.Dp(10)}.Layout),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if ui.presetEditor.Active {

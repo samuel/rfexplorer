@@ -195,10 +195,9 @@ func readPresets(path string) ([]rfx.Preset, error) {
 
 // writePresets checks every preset fits the device before writing any.
 func writePresets(ctx context.Context, dev *rfx.Device, presets []rfx.Preset, w io.Writer) error {
-	slots := dev.Info().MaxPresets()
 	for _, p := range presets {
-		if p.Index >= slots {
-			return fmt.Errorf("preset %q: slot %d is beyond the device's %d slots", p.Name, p.Index+1, slots)
+		if err := dev.CheckPreset(p); err != nil {
+			return fmt.Errorf("preset %q in slot %d: %w", p.Name, p.Index+1, err)
 		}
 	}
 	for _, p := range presets {

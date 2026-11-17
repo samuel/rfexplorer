@@ -42,10 +42,12 @@ func (t *tui) row(y int) string {
 	return b.String()
 }
 
+// find returns the position of r in the plot area, right of the info
+// column.
 func (t *tui) find(r string) (x, y int, ok bool) {
 	w, h := t.screen.Size()
 	for y := range h {
-		for x := range w {
+		for x := leftWidth; x < w; x++ {
 			if s, _, _ := t.screen.Get(x, y); s == r {
 				return x, y, true
 			}

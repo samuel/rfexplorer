@@ -142,8 +142,18 @@ func runInfo(ctx context.Context, conn *cli.Connection, w io.Writer) error {
 	}
 	info := dev.Info()
 	var b strings.Builder
-	fmt.Fprintf(&b, "Main board:      %s\n", info.Main)
-	fmt.Fprintf(&b, "Expansion board: %s\n", info.Expansion)
+	for _, board := range dev.Boards() {
+		source := "published"
+		if board.Reported {
+			source = "reported"
+		}
+		label := board.Module.String() + " board:"
+		if board.Known() {
+			fmt.Fprintf(&b, "%-17s%s, %s to %s, max span %s (%s)\n", label, board.Model, board.Min, board.Max, board.MaxSpan, source)
+		} else {
+			fmt.Fprintf(&b, "%-17s%s, range unknown\n", label, board.Model)
+		}
+	}
 	fmt.Fprintf(&b, "Firmware:        %s\n", info.Firmware)
 	fmt.Fprintf(&b, "Serial number:   %s\n", rfx.FormatSerialNumber(serial))
 	if s, ok := dev.Sniffer(); ok {
@@ -156,7 +166,6 @@ func runInfo(ctx context.Context, conn *cli.Connection, w io.Writer) error {
 		fmt.Fprintf(&b, "RBW:             %s\n", c.RBW)
 		fmt.Fprintf(&b, "Amplitude:       %d to %d dBm, offset %d dB\n", c.AmpBottom, c.AmpTop, c.AmpOffset)
 		fmt.Fprintf(&b, "Calculator:      %s\n", c.Calculator)
-		fmt.Fprintf(&b, "Board range:     %s to %s, max span %s\n", c.MinFreq, c.MaxFreq, c.MaxSpan)
 	}
 	if dev.SupportsInputStage() {
 		fmt.Fprintf(&b, "Input stage:     %s\n", dev.InputStage())

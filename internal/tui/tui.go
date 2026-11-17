@@ -79,6 +79,7 @@ type tui struct {
 	results chan error
 
 	config     rfx.SweepConfig
+	boards     []rfx.Board
 	sweep      *rfx.Sweep
 	lcd        *rfx.ScreenImage
 	maxHold    trace.MaxHold
@@ -127,6 +128,7 @@ func Run(ctx context.Context, dev *rfx.Device, opts Options) (err error) {
 		logger:       logger,
 		results:      make(chan error, 8),
 		config:       dev.Config(),
+		boards:       dev.Boards(),
 		lcdEnabled:   true,
 		wifiChannels: channelsOf(bandplan.Builtin(bandplan.NameWiFi24)),
 		vtxChannels:  channelsOf(bandplan.Builtin(bandplan.NameFPV58)),
@@ -176,6 +178,7 @@ func (t *tui) handleMessage(msg rfx.Message) {
 	case *rfx.SweepConfig:
 		t.logger.Info("config", "config", fmt.Sprintf("%+v", *msg))
 		t.config = *msg
+		t.boards = t.dev.Boards()
 		t.maxHold.Reset()
 	case *rfx.Sweep:
 		t.sweep = msg
@@ -248,13 +251,7 @@ func (t *tui) handleKey(ev *tcell.EventKey) bool {
 		t.vtx = !t.vtx
 		if t.vtx {
 			t.wifi = false
-			setRange := t.setRange(5350*rfx.MHz, 5950*rfx.MHz)
-			t.command("select FPV range", func(ctx context.Context) error {
-				if _, err := t.dev.SelectModule(ctx, rfx.ModuleMain); err != nil {
-					return err
-				}
-				return setRange(ctx)
-			})
+			t.command("select FPV range", t.setRange(5350*rfx.MHz, 5950*rfx.MHz))
 		}
 	case "w":
 		t.wifi = !t.wifi
@@ -351,11 +348,18 @@ func (t *tui) drawInfo(height int) {
 	c := t.config
 	lines := []string{
 		fmt.Sprintf("Calculator: %s", c.Calculator),
-		fmt.Sprintf("Module: %s", c.Module()),
-		fmt.Sprintf("Range: %.3f-%.3f", c.MinFreq.MHz(), c.MaxFreq.MHz()),
-		fmt.Sprintf("Max span: %s", c.MaxSpan),
 		fmt.Sprintf("Points: %d", c.Points),
 		fmt.Sprintf("RBW: %s", c.RBW),
+	}
+	for _, b := range t.boards {
+		mark := " "
+		if b.Module == c.Module() {
+			mark = "*"
+		}
+		lines = append(lines, fmt.Sprintf("%s%s", mark, b.Model))
+		if b.Known() {
+			lines = append(lines, fmt.Sprintf("  %.3f-%.3f", b.Min.MHz(), b.Max.MHz()), fmt.Sprintf("  max span %s", b.MaxSpan))
+		}
 	}
 	lines = append(append(lines, ""), keyHelp...)
 	for i, l := range lines {

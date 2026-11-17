@@ -167,7 +167,7 @@ func TestWritePresets(t *testing.T) {
 	}
 	defer dev.Close() //nolint:errcheck // test cleanup
 
-	ok := rfx.Preset{Index: 0, Name: "ok", Start: rfx.MHz, Stop: 2 * rfx.MHz, AmpBottom: -100, Iterations: 1}
+	ok := rfx.Preset{Index: 0, Name: "ok", Start: 100 * rfx.MHz, Stop: 200 * rfx.MHz, AmpBottom: -100, Iterations: 1}
 	beyond := ok
 	beyond.Index, beyond.Name = 30, "beyond"
 	if err := writePresets(testContext(t), dev, []rfx.Preset{ok, beyond}, &bytes.Buffer{}); err == nil {

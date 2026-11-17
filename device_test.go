@@ -68,7 +68,11 @@ func (a *fakeAnalyzer) handle(cmd []byte) []byte {
 		}
 		step := (end - start) * 1000 / 111
 		exp := a.config[len("#C2-F:2400000,0855854,0000,-120,0112,")]
-		return setConfig(fmt.Sprintf("#C2-F:%07d,%07d,%s,%s,0112,%c,000,0015000,2700000,0600000,00510,0000,000\r\n", start, step, f[2], f[3], exp))
+		limits := "0015000,2700000"
+		if exp == '0' {
+			limits = "4850000,6100000"
+		}
+		return setConfig(fmt.Sprintf("#C2-F:%07d,%07d,%s,%s,0112,%c,000,%s,0600000,00510,0000,000\r\n", start, step, f[2], f[3], exp, limits))
 	case string(cmd) == "CM\x00":
 		return setConfig(testConfigMain)
 	case string(cmd) == "CM\x01":
@@ -180,7 +184,7 @@ func commandStrings(port *rfxtest.Device) []string {
 	return s
 }
 
-var testPreset = Preset{Index: 3, Name: "Test", Start: 1 * MHz, Stop: 2 * MHz, AmpTop: 0, AmpBottom: -100, Iterations: 1}
+var testPreset = Preset{Index: 3, Name: "Test", Start: 100 * MHz, Stop: 200 * MHz, AmpTop: 0, AmpBottom: -100, Iterations: 1}
 
 func TestHandshake(t *testing.T) {
 	dev, port := newTestDevice(t, nil)
@@ -458,7 +462,7 @@ func TestPresets(t *testing.T) {
 		{Index: 0, Name: "VTX 5.8GHz", Start: 5632 * MHz, Stop: 5958 * MHz, AmpTop: -20, AmpBottom: -90,
 			Calculator: CalculatorNormal, Iterations: 4, Mainboard: true, Marker: MarkerPeak},
 		{Index: 29, Name: "123456789012", Start: 0, Stop: 9999999 * KHz, AmpTop: 35, AmpBottom: 25,
-			Calculator: CalculatorMaxHold, Iterations: 16, Mainboard: false, Marker: MarkerManual},
+			Calculator: CalculatorMaxHold, Iterations: 16, Mainboard: true, Marker: MarkerManual},
 	}
 	for _, p := range want {
 		if err := dev.WritePreset(ctx, p); err != nil {
@@ -550,8 +554,12 @@ func TestSetSweep(t *testing.T) {
 	if dev.Config() != cfg {
 		t.Errorf("Config() = %+v, want %+v", dev.Config(), cfg)
 	}
-	if cmds := commandStrings(port); len(cmds) != 3 || cmds[2] != "C2-F:5350000,5950000,0010,-100" {
+	// The range is on the 6G main board, so it is selected first.
+	if cmds := commandStrings(port); !reflect.DeepEqual(cmds[2:], []string{"CM\x00", "C2-F:5350000,5950000,0010,-100"}) {
 		t.Errorf("sent %q", cmds[2:])
+	}
+	if cfg.ExpansionActive {
+		t.Error("main board not selected")
 	}
 
 	// The device doesn't echo an unchanged configuration, so it is asked.
@@ -562,8 +570,8 @@ func TestSetSweep(t *testing.T) {
 	if cfg.Start != 5350*MHz {
 		t.Errorf("unchanged config: got %+v", cfg)
 	}
-	if cmds := commandStrings(port); len(cmds) != 4 || cmds[3] != "C0" {
-		t.Errorf("unchanged config: sent %q, want only a config request", cmds[3:])
+	if cmds := commandStrings(port); len(cmds) != 5 || cmds[4] != "C0" {
+		t.Errorf("unchanged config: sent %q, want only a config request", cmds[4:])
 	}
 
 	// A device that adjusts the range reports a different start frequency.
@@ -668,7 +676,7 @@ func TestNotApplied(t *testing.T) {
 		t.Errorf("returned config %+v is not the device's", cfg)
 	}
 	// A range the device adjusts is returned as reported, without an error.
-	if _, err := dev.SetSweep(testContext(t), SweepRequest{Start: 1 * GHz, Stop: 2 * GHz, AmpBottom: -120}); err != nil {
+	if _, err := dev.SetSweep(testContext(t), SweepRequest{Start: 1 * GHz, Stop: 1500 * MHz, AmpBottom: -120}); err != nil {
 		t.Errorf("SetSweep = %v", err)
 	}
 }

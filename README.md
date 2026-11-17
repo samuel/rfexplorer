@@ -44,6 +44,11 @@ Neither tool changes the device's settings on startup. `rfxui` can do so on
 request: `-maxhold` switches the calculator to max hold and
 `-module main|expansion` selects a board.
 
+On a device with two RF boards, a frequency range the active board can't
+sweep selects the other board if it can (switching takes a few seconds). A
+range neither board covers is reported as an error. `info` lists each board
+with its limits, and `rfxui` offers a choice of board.
+
 In the terminal display, `w` shows WiFi 2.4 GHz channel power, `v` names the
 5.8 GHz FPV channels at the peak, `m`/`r` switch between max hold and
 realtime, `h`/`c` hold and continue, `l` toggles the LCD, `s` mirrors the
@@ -71,7 +76,8 @@ of high (`+`) and low (`-`) samples. On a 6G + WSUB3G it only works with the
 WSUB3G selected, and the device then ignores analyzer commands: return to the
 analyzer from the device's menu. In testing the device stopped answering
 after its port was reopened while sniffing, until it was reset from its
-menu.
+menu. `sniff` selects the board that covers the frequency, which must be done
+before the device is in sniffer mode.
 
 Library
 -------
@@ -110,6 +116,13 @@ return dev.Err() // nil if the subscription ended because of Close
 
 - Commands take a context and return the configuration the device reports.
   A wait that runs out returns an error matching `rfx.ErrTimeout`.
+- `dev.Boards()` lists the installed RF boards with their frequency limits:
+  those the device reported once the board has been selected, else the
+  model's published limits (`Model.Range`), which leave out licensed ranges.
+  `SetSweep`, `SetWifiMode` and `SetSniffer` keep the active board when it
+  covers the request and otherwise select one that does. `dev.BoardFor`
+  shows the choice without sending anything. A range no board can sweep is
+  an `*rfx.RangeError` matching `rfx.ErrOutOfRange`.
 - Each subscription is buffered independently. A slow subscriber loses its
   oldest sweeps, never device state, and never delays the device.
 - Frequencies are `rfx.Frequency` values in hertz. Levels are in dBm.

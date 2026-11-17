@@ -246,7 +246,7 @@ func TestPresetJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"index":3,"name":"Test","start":"1MHz","stop":"2MHz","amp_top":0,"amp_bottom":-100,"calculator":"MaxHold","iterations":1,"mainboard":false,"marker":"Manual"}`
+	want := `{"index":3,"name":"Test","start":"100MHz","stop":"200MHz","amp_top":0,"amp_bottom":-100,"calculator":"MaxHold","iterations":1,"mainboard":false,"marker":"Manual"}`
 	if string(b) != want {
 		t.Fatalf("got %s\nwant %s", b, want)
 	}

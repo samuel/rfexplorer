@@ -135,7 +135,10 @@ function showConfig(c) {
   const rows = [
     ["Module", c.module], ["Points", c.points], ["Step", `${(c.step / 1e3).toFixed(1)} kHz`],
     ["RBW", `${(c.rbw / 1e3).toFixed(0)} kHz`], ["Amplitude", `${c.amp_bottom} to ${c.amp_top} dBm`],
-    ["Board range", `${mhz(c.min_freq)}–${mhz(c.max_freq)}`],
+    ...c.boards.map((b) => [
+      `${b.module === c.module ? "▸ " : ""}${b.model}`,
+      b.max_freq ? `${mhz(b.min_freq)}–${mhz(b.max_freq)}, span ${mhz(b.max_span)}` : "range unknown",
+    ]),
   ];
   const dl = $("config");
   dl.replaceChildren(...rows.flatMap(([k, v]) => {
